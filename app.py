@@ -6,13 +6,20 @@ An AI-powered assistant for Colombian Seismic-Resistant Building Code (NSR-10)
 import os
 import warnings
 import streamlit as st
-from dotenv import load_dotenv
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables - support both local (.env) and Streamlit Cloud (secrets)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not needed on Streamlit Cloud
+
+# Set API key from Streamlit secrets if available (for Streamlit Cloud deployment)
+if "OPENAI_API_KEY" in st.secrets:
+    os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 
 # LangChain imports
 from langchain_community.vectorstores import Chroma
@@ -113,7 +120,11 @@ def load_vectordb():
     """Load the Chroma vector database from disk."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        st.error("OPENAI_API_KEY not found. Please set it in your .env file or environment variables.")
+        st.error(
+            "OPENAI_API_KEY not found. "
+            "For local development: create a .env file with your key. "
+            "For Streamlit Cloud: add OPENAI_API_KEY in Settings → Secrets."
+        )
         st.stop()
 
     embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME)
