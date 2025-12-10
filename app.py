@@ -18,8 +18,11 @@ except ImportError:
     pass  # dotenv not needed on Streamlit Cloud
 
 # Set API key from Streamlit secrets if available (for Streamlit Cloud deployment)
-if "OPENAI_API_KEY" in st.secrets:
-    os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+try:
+    if "OPENAI_API_KEY" in st.secrets:
+        os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+except Exception:
+    pass  # No secrets.toml file, use .env instead
 
 # LangChain imports
 from langchain_community.vectorstores import Chroma
