@@ -10,9 +10,20 @@ import os
 import warnings
 import streamlit as st
 from typing import List
+from datetime import datetime
+import uuid
+import json
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
+
+# Google Sheets imports for feedback
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSPREAD_AVAILABLE = True
+except ImportError:
+    GSPREAD_AVAILABLE = False
 
 # Load environment variables - support both local (.env) and Streamlit Cloud (secrets)
 try:
@@ -85,6 +96,11 @@ Las respuestas están estructuradas para distinguir claramente entre ambas fuent
         "page_label": "Página",
         "welcome_msg": "Escriba una consulta en el panel izquierdo para obtener información de la NSR-10 y ACI-318.",
         "api_key_error": "OPENAI_API_KEY no encontrada. Para desarrollo local: cree un archivo .env con su clave. Para Streamlit Cloud: agregue OPENAI_API_KEY en Settings → Secrets.",
+        "feedback_question": "¿Fue útil esta respuesta?",
+        "feedback_thanks": "¡Gracias por tu feedback!",
+        "feedback_placeholder": "Comentario opcional...",
+        "feedback_submit": "Enviar feedback",
+        "feedback_error": "Error al guardar feedback. Intenta de nuevo.",
     },
     "en": {
         "page_title": "Normative Assistant NSR-10 + ACI-318",
@@ -123,8 +139,149 @@ Responses are structured to clearly distinguish between both sources.""",
         "page_label": "Page",
         "welcome_msg": "Enter a query in the left panel to get information from NSR-10 and ACI-318.",
         "api_key_error": "OPENAI_API_KEY not found. For local development: create a .env file with your key. For Streamlit Cloud: add OPENAI_API_KEY in Settings → Secrets.",
+        "feedback_question": "Was this response helpful?",
+        "feedback_thanks": "Thank you for your feedback!",
+        "feedback_placeholder": "Optional comment...",
+        "feedback_submit": "Submit feedback",
+        "feedback_error": "Error saving feedback. Please try again.",
     }
 }
+
+# =============================================================================
+# FEEDBACK MODULE / MÓDULO DE FEEDBACK
+# =============================================================================
+
+@st.cache_resource
+def get_gspread_client():
+    """
+    Initialize Google Sheets client using Streamlit secrets.
+    Returns None if credentials are not configured.
+    """
+    if not GSPREAD_AVAILABLE:
+        return None
+
+    try:
+        # Try to get credentials from Streamlit secrets
+        if "gcp_service_account" in st.secrets:
+            credentials_dict = dict(st.secrets["gcp_service_account"])
+            scopes = [
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"
+            ]
+            credentials = Credentials.from_service_account_info(
+                credentials_dict,
+                scopes=scopes
+            )
+            client = gspread.authorize(credentials)
+            return client
+    except Exception as e:
+        st.warning(f"Feedback system not configured: {e}")
+        return None
+
+    return None
+
+
+def get_feedback_sheet():
+    """
+    Get the feedback Google Sheet worksheet.
+    Returns None if not configured.
+    """
+    client = get_gspread_client()
+    if client is None:
+        return None
+
+    try:
+        # Get spreadsheet ID from secrets
+        if "feedback_sheet_id" in st.secrets:
+            sheet_id = st.secrets["feedback_sheet_id"]
+            spreadsheet = client.open_by_key(sheet_id)
+            worksheet = spreadsheet.sheet1
+            return worksheet
+    except Exception as e:
+        st.warning(f"Could not open feedback sheet: {e}")
+        return None
+
+    return None
+
+
+def log_interaction(session_id: str, query: str, response: str,
+                    sources_nsr: list, sources_aci: list,
+                    mode: str, language: str) -> str:
+    """
+    Log an interaction to Google Sheets (without rating yet).
+    Returns the row ID for later rating update.
+    """
+    worksheet = get_feedback_sheet()
+    if worksheet is None:
+        return None
+
+    try:
+        timestamp = datetime.now().isoformat()
+        nsr_pages = ", ".join([str(s.get("page", "N/A")) for s in sources_nsr])
+        aci_pages = ", ".join([str(s.get("page", "N/A")) for s in sources_aci])
+
+        # Truncate response to avoid Google Sheets cell limits (50k chars)
+        truncated_response = response[:5000] + "..." if len(response) > 5000 else response
+
+        row_data = [
+            timestamp,
+            session_id,
+            query,
+            truncated_response,
+            nsr_pages,
+            aci_pages,
+            mode,
+            language,
+            "",  # rating (empty initially)
+            ""   # feedback_text (empty initially)
+        ]
+
+        worksheet.append_row(row_data, value_input_option="RAW")
+
+        # Return the timestamp as a unique identifier for this row
+        return timestamp
+
+    except Exception as e:
+        # Silently fail - don't break the app if feedback logging fails
+        return None
+
+
+def update_rating(session_id: str, timestamp: str, rating: int, feedback_text: str = "") -> bool:
+    """
+    Update the rating for a previously logged interaction.
+    """
+    worksheet = get_feedback_sheet()
+    if worksheet is None:
+        return False
+
+    try:
+        # Find the row with matching timestamp and session_id
+        all_records = worksheet.get_all_records()
+
+        for idx, record in enumerate(all_records):
+            if record.get("timestamp") == timestamp and record.get("session_id") == session_id:
+                row_num = idx + 2  # +2 because records are 0-indexed and row 1 is header
+
+                # Update rating (column I = 9) and feedback_text (column J = 10)
+                worksheet.update_cell(row_num, 9, rating)
+                if feedback_text:
+                    worksheet.update_cell(row_num, 10, feedback_text)
+                return True
+
+        return False
+
+    except Exception as e:
+        return False
+
+
+def get_session_id() -> str:
+    """
+    Get or create a unique session ID for the current user session.
+    """
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())[:8]
+    return st.session_state.session_id
+
 
 # =============================================================================
 # PROMPT TEMPLATES / PLANTILLAS DE PROMPT
@@ -644,7 +801,7 @@ def main():
 
         with chat_container:
             if st.session_state.messages:
-                for msg in st.session_state.messages:
+                for msg_idx, msg in enumerate(st.session_state.messages):
                     if msg["role"] == "user":
                         with st.chat_message("user"):
                             st.markdown(msg["content"])
@@ -689,6 +846,32 @@ def main():
                                             st.text(source["content"][:500] + "..." if len(source["content"]) > 500 else source["content"])
                                             if i < len(other_sources):
                                                 st.divider()
+
+                            # Feedback rating buttons
+                            interaction_id = msg.get("interaction_id")
+                            if interaction_id and not msg.get("rated", False):
+                                st.caption(txt['feedback_question'])
+                                col1, col2, col3 = st.columns([1, 1, 4])
+                                with col1:
+                                    if st.button("👍", key=f"thumbs_up_{msg_idx}", help="Útil / Helpful"):
+                                        session_id = get_session_id()
+                                        if update_rating(session_id, interaction_id, 5):
+                                            st.session_state.messages[msg_idx]["rated"] = True
+                                            st.session_state.messages[msg_idx]["rating"] = 5
+                                            st.rerun()
+                                with col2:
+                                    if st.button("👎", key=f"thumbs_down_{msg_idx}", help="No útil / Not helpful"):
+                                        session_id = get_session_id()
+                                        if update_rating(session_id, interaction_id, 1):
+                                            st.session_state.messages[msg_idx]["rated"] = True
+                                            st.session_state.messages[msg_idx]["rating"] = 1
+                                            st.rerun()
+                            elif msg.get("rated", False):
+                                rating = msg.get("rating", 0)
+                                if rating >= 4:
+                                    st.caption(f"✅ {txt['feedback_thanks']} 👍")
+                                else:
+                                    st.caption(f"✅ {txt['feedback_thanks']} 👎")
             else:
                 st.info(txt['welcome_msg'])
 
@@ -720,11 +903,29 @@ def main():
                     "content": doc.page_content
                 })
 
-            # Add assistant message to history
+            # Separate sources by code for logging
+            nsr_sources = [s for s in sources if s.get("code") == "NSR-10"]
+            aci_sources = [s for s in sources if s.get("code") == "ACI-318"]
+
+            # Log interaction to Google Sheets
+            session_id = get_session_id()
+            interaction_id = log_interaction(
+                session_id=session_id,
+                query=query_to_process,
+                response=answer,
+                sources_nsr=nsr_sources,
+                sources_aci=aci_sources,
+                mode=mode,
+                language=lang
+            )
+
+            # Add assistant message to history with interaction_id for rating
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": answer,
-                "sources": sources
+                "sources": sources,
+                "interaction_id": interaction_id,
+                "rated": False
             })
 
         st.rerun()
