@@ -69,6 +69,6 @@ tmp/
 temp/
 *.tmp
 
-# Vector databases - too large for Git
+# Vector databases
 NSR10_DB/
-combined_DB/
+# combined_DB/ - Re-added to repo for Streamlit Cloud deployment
