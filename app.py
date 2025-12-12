@@ -65,14 +65,18 @@ UI_TEXT = {
         "header_subtitle": "NSR-10 (normativa obligatoria) + ACI-318 (referencia técnica) | Colombia",
         "config_header": "Configuración",
         "language_label": "Idioma / Language:",
-        "mode_label": "Modo de respuesta:",
-        "mode_options": ["NSR-10 + ACI-318", "Solo NSR-10"],
-        "mode_help": """**NSR-10 + ACI-318** (Recomendado): Respuestas estructuradas con:
-1. Referencia normativa primaria (NSR-10)
-2. Comparación con ACI-318
-3. Recomendaciones técnicas
+        "response_type_label": "Tipo de respuesta:",
+        "response_type_options": ["Solo citas normativas", "Citas + Recomendaciones"],
+        "response_type_help": """**Solo citas normativas** (Modo diccionario): Solo cita el texto exacto de la norma sin interpretaciones ni recomendaciones.
 
-**Solo NSR-10**: Respuestas basadas únicamente en la normativa colombiana.""",
+**Citas + Recomendaciones** (Recomendado): Incluye citas normativas más recomendaciones técnicas y buenas prácticas.""",
+        "code_source_label": "Fuente normativa:",
+        "code_source_options": ["NSR-10 + ACI-318", "Solo NSR-10", "Solo ACI-318"],
+        "code_source_help": """**NSR-10 + ACI-318**: Consulta ambas normas con comparación.
+
+**Solo NSR-10**: Solo normativa colombiana obligatoria.
+
+**Solo ACI-318**: Solo código ACI-318 como referencia primaria.""",
         "clear_btn": "Limpiar conversación",
         "about_header": "Acerca de",
         "about_text": """Este asistente normativo avanzado utiliza RAG para consultar:
@@ -110,14 +114,18 @@ Las respuestas están estructuradas para distinguir claramente entre ambas fuent
         "header_subtitle": "NSR-10 (mandatory code) + ACI-318 (technical reference) | Colombia",
         "config_header": "Settings",
         "language_label": "Idioma / Language:",
-        "mode_label": "Response mode:",
-        "mode_options": ["NSR-10 + ACI-318", "NSR-10 Only"],
-        "mode_help": """**NSR-10 + ACI-318** (Recommended): Structured responses with:
-1. Primary normative reference (NSR-10)
-2. Comparison with ACI-318
-3. Technical recommendations
+        "response_type_label": "Response type:",
+        "response_type_options": ["Normative citations only", "Citations + Recommendations"],
+        "response_type_help": """**Normative citations only** (Dictionary mode): Only quotes the exact normative text without interpretations or recommendations.
 
-**NSR-10 Only**: Responses based only on Colombian mandatory code.""",
+**Citations + Recommendations** (Recommended): Includes normative citations plus technical recommendations and best practices.""",
+        "code_source_label": "Code source:",
+        "code_source_options": ["NSR-10 + ACI-318", "NSR-10 Only", "ACI-318 Only"],
+        "code_source_help": """**NSR-10 + ACI-318**: Query both codes with comparison.
+
+**NSR-10 Only**: Only Colombian mandatory code.
+
+**ACI-318 Only**: Only ACI-318 code as primary reference.""",
         "clear_btn": "Clear conversation",
         "about_header": "About",
         "about_text": """This advanced normative assistant uses RAG to query:
@@ -469,50 +477,358 @@ Current question:
 Response (in English):
 """
 
+# Dictionary mode prompts (citations only, no recommendations)
+PROMPT_DICTIONARY_BOTH_ES = """
+Eres un asistente que actúa como diccionario normativo de ingeniería estructural.
+
+Tu objetivo es citar ÚNICAMENTE el texto exacto de las normas NSR-10 y ACI-318 sin interpretaciones ni recomendaciones.
+
+CONTEXTO IMPORTANTE:
+- Los fragmentos del contexto tienen un campo "code" en sus metadatos: "NSR-10" o "ACI-318".
+- NSR-10 es la NORMATIVA OBLIGATORIA en Colombia.
+- ACI-318 es una REFERENCIA TÉCNICA.
+
+MEMORIA CONVERSACIONAL:
+- Revisa el HISTORIAL DE CONVERSACIÓN antes de responder.
+- Si la pregunta es breve o hace referencia a un tema anterior, interpreta en contexto.
+
+REGLAS ESTRICTAS:
+1. Cita ÚNICAMENTE el texto normativo exacto que aparece en el contexto.
+2. NO proporciones interpretaciones, análisis ni recomendaciones.
+3. NO inventes numerales ni texto que no aparezca en el contexto.
+4. Distingue claramente entre lo que dice NSR-10 y lo que dice ACI-318.
+5. Menciona el título, capítulo, artículo o sección si aparece en el contexto.
+6. Si no hay información suficiente, responde:
+   "No encuentro información normativa en el contexto proporcionado."
+
+ESTRUCTURA TU RESPUESTA EN DOS SECCIONES:
+
+**Referencia normativa (NSR-10)**
+- Cita el texto exacto de los fragmentos con code="NSR-10".
+- Indica títulos, capítulos, artículos o numerales explícitos.
+- Si no hay fragmentos de NSR-10: "No se encontró información de NSR-10 en el contexto."
+
+**Referencia normativa (ACI-318)**
+- Cita el texto exacto de los fragmentos con code="ACI-318".
+- Indica secciones o artículos explícitos.
+- Si no hay fragmentos de ACI-318: "No se encontró información de ACI-318 en el contexto."
+
+Historial de conversación:
+{chat_history}
+
+Contexto normativo:
+{context}
+
+Pregunta actual:
+{question}
+
+Respuesta (en español):
+"""
+
+PROMPT_DICTIONARY_BOTH_EN = """
+You are an assistant acting as a normative dictionary for structural engineering.
+
+Your goal is to quote ONLY the exact text from NSR-10 and ACI-318 codes without interpretations or recommendations.
+
+IMPORTANT CONTEXT:
+- Context fragments have a "code" field in their metadata: "NSR-10" or "ACI-318".
+- NSR-10 is the MANDATORY CODE in Colombia.
+- ACI-318 is a TECHNICAL REFERENCE.
+
+CONVERSATIONAL MEMORY:
+- Review the CONVERSATION HISTORY before responding.
+- If the question is brief or references a previous topic, interpret in context.
+
+STRICT RULES:
+1. Quote ONLY the exact normative text that appears in the context.
+2. DO NOT provide interpretations, analysis, or recommendations.
+3. DO NOT invent section numbers or text not present in the context.
+4. Clearly distinguish between what NSR-10 says and what ACI-318 says.
+5. Mention the title, chapter, article, or section if it appears in the context.
+6. If there is not enough information, respond:
+   "I cannot find normative information in the provided context."
+
+STRUCTURE YOUR RESPONSE IN TWO SECTIONS:
+
+**Normative Reference (NSR-10)**
+- Quote the exact text from fragments with code="NSR-10".
+- Indicate explicit titles, chapters, articles, or sections.
+- If no NSR-10 fragments: "No NSR-10 information was found in the context."
+
+**Normative Reference (ACI-318)**
+- Quote the exact text from fragments with code="ACI-318".
+- Indicate explicit sections or articles.
+- If no ACI-318 fragments: "No ACI-318 information was found in the context."
+
+Conversation history:
+{chat_history}
+
+Normative context:
+{context}
+
+Current question:
+{question}
+
+Response (in English):
+"""
+
+PROMPT_DICTIONARY_NSR_ES = """
+Eres un asistente que actúa como diccionario normativo de la NSR-10.
+
+Tu objetivo es citar ÚNICAMENTE el texto exacto de la NSR-10 sin interpretaciones ni recomendaciones.
+
+REGLAS ESTRICTAS:
+1. Usa ÚNICAMENTE los fragmentos con code="NSR-10" del contexto.
+2. IGNORA los fragmentos de ACI-318.
+3. Cita el texto normativo exacto sin interpretaciones.
+4. NO proporciones recomendaciones ni análisis.
+5. Menciona el título, capítulo, artículo o numeral si aparece en el contexto.
+6. NO inventes numerales ni texto que no aparezca en el contexto.
+7. Si no hay información de NSR-10, responde:
+   "No encuentro información de la NSR-10 en el contexto proporcionado."
+
+ESTRUCTURA TU RESPUESTA:
+
+**Referencia normativa (NSR-10)**
+- Cita el texto exacto de los fragmentos con code="NSR-10".
+- Indica títulos, capítulos, artículos o numerales explícitos.
+
+Historial de conversación:
+{chat_history}
+
+Contexto normativo:
+{context}
+
+Pregunta actual:
+{question}
+
+Respuesta (en español):
+"""
+
+PROMPT_DICTIONARY_NSR_EN = """
+You are an assistant acting as a normative dictionary for NSR-10.
+
+Your goal is to quote ONLY the exact text from NSR-10 without interpretations or recommendations.
+
+STRICT RULES:
+1. Use ONLY fragments with code="NSR-10" from the context.
+2. IGNORE ACI-318 fragments.
+3. Quote the exact normative text without interpretations.
+4. DO NOT provide recommendations or analysis.
+5. Mention the title, chapter, article, or section if it appears in the context.
+6. DO NOT invent section numbers or text not present in the context.
+7. If there is no NSR-10 information, respond:
+   "I cannot find NSR-10 information in the provided context."
+
+STRUCTURE YOUR RESPONSE:
+
+**Normative Reference (NSR-10)**
+- Quote the exact text from fragments with code="NSR-10".
+- Indicate explicit titles, chapters, articles, or sections.
+
+Conversation history:
+{chat_history}
+
+Normative context:
+{context}
+
+Current question:
+{question}
+
+Response (in English):
+"""
+
+PROMPT_DICTIONARY_ACI_ES = """
+Eres un asistente que actúa como diccionario normativo del código ACI-318.
+
+Tu objetivo es citar ÚNICAMENTE el texto exacto del ACI-318 sin interpretaciones ni recomendaciones.
+
+REGLAS ESTRICTAS:
+1. Usa ÚNICAMENTE los fragmentos con code="ACI-318" del contexto.
+2. IGNORA los fragmentos de NSR-10.
+3. Cita el texto normativo exacto sin interpretaciones.
+4. NO proporciones recomendaciones ni análisis.
+5. Menciona la sección o artículo si aparece en el contexto.
+6. NO inventes numerales ni texto que no aparezca en el contexto.
+7. Si no hay información de ACI-318, responde:
+   "No encuentro información del ACI-318 en el contexto proporcionado."
+
+ESTRUCTURA TU RESPUESTA:
+
+**Referencia normativa (ACI-318)**
+- Cita el texto exacto de los fragmentos con code="ACI-318".
+- Indica secciones o artículos explícitos.
+
+Historial de conversación:
+{chat_history}
+
+Contexto normativo:
+{context}
+
+Pregunta actual:
+{question}
+
+Respuesta (en español):
+"""
+
+PROMPT_DICTIONARY_ACI_EN = """
+You are an assistant acting as a normative dictionary for ACI-318 code.
+
+Your goal is to quote ONLY the exact text from ACI-318 without interpretations or recommendations.
+
+STRICT RULES:
+1. Use ONLY fragments with code="ACI-318" from the context.
+2. IGNORE NSR-10 fragments.
+3. Quote the exact normative text without interpretations.
+4. DO NOT provide recommendations or analysis.
+5. Mention the section or article if it appears in the context.
+6. DO NOT invent section numbers or text not present in the context.
+7. If there is no ACI-318 information, respond:
+   "I cannot find ACI-318 information in the provided context."
+
+STRUCTURE YOUR RESPONSE:
+
+**Normative Reference (ACI-318)**
+- Quote the exact text from fragments with code="ACI-318".
+- Indicate explicit sections or articles.
+
+Conversation history:
+{chat_history}
+
+Normative context:
+{context}
+
+Current question:
+{question}
+
+Response (in English):
+"""
+
+# ACI-318 Solo prompts (with recommendations, treating ACI as primary)
+PROMPT_ACI318_SOLO_ES = """
+Eres un asistente experto en ingeniería estructural y en el código ACI-318 del American Concrete Institute.
+
+Tu objetivo es guiar a ingenieros en la interpretación y aplicación del ACI-318. Dispones de fragmentos del texto normativo bajo la sección "Contexto". Los fragmentos pueden provenir de NSR-10 o ACI-318, identificados por el campo "code" en sus metadatos.
+
+REGLAS ESTRICTAS:
+1. Usa ÚNICAMENTE los fragmentos con code="ACI-318" del contexto para respuestas normativas.
+2. IGNORA los fragmentos de NSR-10 en este modo.
+3. Cuando cites el código, menciona claramente la sección o artículo si aparece en el contexto.
+4. NO inventes numerales ni texto literal que no aparezca en el contexto.
+5. Si no hay información de ACI-318 en el contexto, responde:
+   "No encuentro información normativa del ACI-318 en el contexto proporcionado."
+
+ESTRUCTURA TU RESPUESTA EN DOS SECCIONES:
+
+**1) Referencia normativa (ACI-318)**
+- Resume el contenido relevante del ACI-318 usando ÚNICAMENTE fragmentos con code="ACI-318".
+- Cita secciones o artículos que aparezcan explícitamente.
+
+**2) Recomendaciones y buenas prácticas (no obligatorias)**
+- Propón recomendaciones para diseño, detallado, verificaciones adicionales.
+- Aclara EXPLÍCITAMENTE que son **recomendaciones técnicas** y NO texto obligatorio.
+
+Historial de conversación:
+{chat_history}
+
+Contexto normativo:
+{context}
+
+Pregunta actual:
+{question}
+
+Respuesta (en español):
+"""
+
+PROMPT_ACI318_SOLO_EN = """
+You are an expert assistant in structural engineering and the ACI-318 code from the American Concrete Institute.
+
+Your goal is to guide engineers in the interpretation and application of ACI-318. You have text fragments from the normative under the "Context" section. Fragments may come from NSR-10 or ACI-318, identified by the "code" field in their metadata.
+
+STRICT RULES:
+1. Use ONLY fragments with code="ACI-318" from the context for normative responses.
+2. IGNORE NSR-10 fragments in this mode.
+3. When citing the code, clearly mention the section or article if it appears in the context.
+4. DO NOT invent section numbers or literal text not present in the context.
+5. If there is no ACI-318 information in the context, respond:
+   "I cannot find ACI-318 normative information in the provided context."
+
+STRUCTURE YOUR RESPONSE IN TWO SECTIONS:
+
+**1) Normative Reference (ACI-318)**
+- Summarize the relevant ACI-318 content using ONLY fragments with code="ACI-318".
+- Cite sections or articles that appear explicitly.
+
+**2) Recommendations and Best Practices (non-mandatory)**
+- Propose recommendations for design, detailing, additional verifications.
+- EXPLICITLY clarify that these are **technical recommendations** and NOT mandatory text.
+
+Conversation history:
+{chat_history}
+
+Normative context:
+{context}
+
+Current question:
+{question}
+
+Response (in English):
+"""
+
 # =============================================================================
 # BALANCED RETRIEVER / RETRIEVER BALANCEADO
 # =============================================================================
 class BalancedCodeRetriever(BaseRetriever):
     """
-    Custom retriever that fetches documents from both NSR-10 and ACI-318
-    regardless of query language, ensuring balanced representation.
+    Custom retriever that fetches documents from NSR-10 and/or ACI-318
+    based on the code_filter parameter.
 
-    Retriever personalizado que obtiene documentos de NSR-10 y ACI-318
-    independientemente del idioma de la consulta, asegurando representación balanceada.
+    Retriever personalizado que obtiene documentos de NSR-10 y/o ACI-318
+    según el parámetro code_filter.
     """
     vectorstore: Chroma = Field(description="The Chroma vectorstore")
     k_per_code: int = Field(default=4, description="Number of documents to retrieve per code")
+    code_filter: str = Field(default="both", description="Which codes to retrieve: 'both', 'nsr', or 'aci'")
 
     class Config:
         arbitrary_types_allowed = True
 
     def _get_relevant_documents(self, query: str) -> List[Document]:
         """
-        Retrieve documents from both codes with balanced representation.
+        Retrieve documents based on code_filter setting.
         """
         all_docs = []
 
+        # Determine which codes to retrieve based on code_filter
+        retrieve_nsr = self.code_filter in ["both", "nsr"]
+        retrieve_aci = self.code_filter in ["both", "aci"]
+
+        # When filtering to single code, retrieve more documents
+        k = self.k_per_code if self.code_filter == "both" else self.k_per_code * 2
+
         # Retrieve from NSR-10
-        try:
-            nsr_docs = self.vectorstore.similarity_search(
-                query,
-                k=self.k_per_code,
-                filter={"code": "NSR-10"}
-            )
-            all_docs.extend(nsr_docs)
-        except Exception:
-            pass
+        if retrieve_nsr:
+            try:
+                nsr_docs = self.vectorstore.similarity_search(
+                    query,
+                    k=k,
+                    filter={"code": "NSR-10"}
+                )
+                all_docs.extend(nsr_docs)
+            except Exception:
+                pass
 
         # Retrieve from ACI-318
-        try:
-            aci_docs = self.vectorstore.similarity_search(
-                query,
-                k=self.k_per_code,
-                filter={"code": "ACI-318"}
-            )
-            all_docs.extend(aci_docs)
-        except Exception:
-            pass
+        if retrieve_aci:
+            try:
+                aci_docs = self.vectorstore.similarity_search(
+                    query,
+                    k=k,
+                    filter={"code": "ACI-318"}
+                )
+                all_docs.extend(aci_docs)
+            except Exception:
+                pass
 
         return all_docs
 
@@ -545,16 +861,43 @@ def get_llm():
     )
 
 
-def get_prompt_template(mode: str, language: str) -> PromptTemplate:
+def get_prompt_template(response_type: str, code_source: str, language: str) -> PromptTemplate:
     """
-    Get the appropriate prompt template based on mode and language.
-    """
-    is_nsr_only = "Solo" in mode or "Only" in mode
+    Get the appropriate prompt template based on response type, code source, and language.
 
-    if language == "es":
-        template = PROMPT_NSR10_SOLO_ES if is_nsr_only else PROMPT_NSR10_ACI318_ES
+    Args:
+        response_type: "dictionary" (citations only) or "recommendations" (with recommendations)
+        code_source: "both", "nsr", or "aci"
+        language: "es" or "en"
+    """
+    # Determine if dictionary mode (citations only) or recommendations mode
+    is_dictionary = "citas" in response_type.lower() or "citations" in response_type.lower()
+    if "Solo" in response_type or "only" in response_type.lower():
+        is_dictionary = True
+    if "Recomendaciones" in response_type or "Recommendations" in response_type:
+        is_dictionary = False
+
+    # Determine code source
+    is_nsr_only = "NSR" in code_source and "ACI" not in code_source
+    is_aci_only = "ACI" in code_source and "NSR" not in code_source
+    is_both = not is_nsr_only and not is_aci_only
+
+    if is_dictionary:
+        # Dictionary mode: citations only, no recommendations
+        if is_both:
+            template = PROMPT_DICTIONARY_BOTH_ES if language == "es" else PROMPT_DICTIONARY_BOTH_EN
+        elif is_nsr_only:
+            template = PROMPT_DICTIONARY_NSR_ES if language == "es" else PROMPT_DICTIONARY_NSR_EN
+        else:  # is_aci_only
+            template = PROMPT_DICTIONARY_ACI_ES if language == "es" else PROMPT_DICTIONARY_ACI_EN
     else:
-        template = PROMPT_NSR10_SOLO_EN if is_nsr_only else PROMPT_NSR10_ACI318_EN
+        # Recommendations mode: with recommendations
+        if is_both:
+            template = PROMPT_NSR10_ACI318_ES if language == "es" else PROMPT_NSR10_ACI318_EN
+        elif is_nsr_only:
+            template = PROMPT_NSR10_SOLO_ES if language == "es" else PROMPT_NSR10_SOLO_EN
+        else:  # is_aci_only
+            template = PROMPT_ACI318_SOLO_ES if language == "es" else PROMPT_ACI318_SOLO_EN
 
     return PromptTemplate(
         input_variables=["context", "question", "chat_history"],
@@ -623,7 +966,7 @@ def build_contextualized_query(question: str, chat_history: list, llm) -> str:
     return question
 
 
-def query_with_sources(vectordb, llm, question: str, mode: str, language: str, chat_history: list) -> dict:
+def query_with_sources(vectordb, llm, question: str, response_type: str, code_source: str, language: str, chat_history: list) -> dict:
     """
     Query the vectorstore and generate a response with sources.
 
@@ -631,7 +974,8 @@ def query_with_sources(vectordb, llm, question: str, mode: str, language: str, c
         vectordb: Chroma vector database
         llm: Language model
         question: User's question
-        mode: Response mode
+        response_type: "dictionary" (citations only) or "recommendations" (with recommendations)
+        code_source: Code source selection from UI (e.g., "NSR-10 + ACI-318", "Solo NSR-10", "Solo ACI-318")
         language: "es" or "en"
         chat_history: List of previous messages for conversational context
 
@@ -641,10 +985,19 @@ def query_with_sources(vectordb, llm, question: str, mode: str, language: str, c
     # Build contextualized query for better retrieval on follow-up questions
     search_query = build_contextualized_query(question, chat_history, llm)
 
-    # Create balanced retriever
+    # Determine code filter based on code_source selection
+    if "ACI" in code_source and "NSR" not in code_source:
+        code_filter = "aci"
+    elif "NSR" in code_source and "ACI" not in code_source:
+        code_filter = "nsr"
+    else:
+        code_filter = "both"
+
+    # Create retriever with appropriate code filter
     retriever = BalancedCodeRetriever(
         vectorstore=vectordb,
-        k_per_code=4  # 4 from NSR-10 + 4 from ACI-318 = 8 total
+        k_per_code=4,  # 4 from each code when both, 8 when single code
+        code_filter=code_filter
     )
 
     # Retrieve relevant documents using contextualized query
@@ -663,7 +1016,7 @@ def query_with_sources(vectordb, llm, question: str, mode: str, language: str, c
     formatted_history = format_chat_history(chat_history, language)
 
     # Get prompt and generate response
-    prompt = get_prompt_template(mode, language)
+    prompt = get_prompt_template(response_type, code_source, language)
     chain = prompt | llm | StrOutputParser()
 
     answer = chain.invoke({
@@ -734,12 +1087,22 @@ def main():
 
         st.divider()
 
-        # Mode selector
-        mode = st.radio(
-            txt['mode_label'],
-            options=txt['mode_options'],
-            index=0,
-            help=txt['mode_help']
+        # Response type selector (Dictionary vs Recommendations)
+        response_type = st.radio(
+            txt['response_type_label'],
+            options=txt['response_type_options'],
+            index=1,  # Default to "Citations + Recommendations"
+            help=txt['response_type_help']
+        )
+
+        st.divider()
+
+        # Code source selector (NSR-10, ACI-318, or Both)
+        code_source = st.radio(
+            txt['code_source_label'],
+            options=txt['code_source_options'],
+            index=0,  # Default to "NSR-10 + ACI-318"
+            help=txt['code_source_help']
         )
 
         st.divider()
@@ -920,7 +1283,7 @@ def main():
 
         with st.spinner(txt['spinner_text']):
             # Pass previous messages for conversational context
-            result = query_with_sources(vectordb, llm, query_to_process, mode, lang, previous_messages)
+            result = query_with_sources(vectordb, llm, query_to_process, response_type, code_source, lang, previous_messages)
 
             answer = result["answer"]
             sources = []
@@ -939,6 +1302,9 @@ def main():
             nsr_sources = [s for s in sources if s.get("code") == "NSR-10"]
             aci_sources = [s for s in sources if s.get("code") == "ACI-318"]
 
+            # Compose mode string for logging
+            mode_for_log = f"{response_type} | {code_source}"
+
             # Log interaction to Google Sheets
             session_id = get_session_id()
             interaction_id = log_interaction(
@@ -947,7 +1313,7 @@ def main():
                 response=answer,
                 sources_nsr=nsr_sources,
                 sources_aci=aci_sources,
-                mode=mode,
+                mode=mode_for_log,
                 language=lang
             )
 
