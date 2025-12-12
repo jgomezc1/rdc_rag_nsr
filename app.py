@@ -99,7 +99,9 @@ Las respuestas están estructuradas para distinguir claramente entre ambas fuent
         "feedback_question": "¿Fue útil esta respuesta?",
         "feedback_thanks": "¡Gracias por tu feedback!",
         "feedback_placeholder": "Comentario opcional...",
-        "feedback_submit": "Enviar feedback",
+        "feedback_submit": "Enviar",
+        "feedback_skip": "Omitir",
+        "feedback_comment_prompt": "¿Qué podría mejorar? (opcional)",
         "feedback_error": "Error al guardar feedback. Intenta de nuevo.",
     },
     "en": {
@@ -142,7 +144,9 @@ Responses are structured to clearly distinguish between both sources.""",
         "feedback_question": "Was this response helpful?",
         "feedback_thanks": "Thank you for your feedback!",
         "feedback_placeholder": "Optional comment...",
-        "feedback_submit": "Submit feedback",
+        "feedback_submit": "Submit",
+        "feedback_skip": "Skip",
+        "feedback_comment_prompt": "What could be improved? (optional)",
         "feedback_error": "Error saving feedback. Please try again.",
     }
 }
@@ -850,21 +854,49 @@ def main():
                             # Feedback rating buttons
                             interaction_id = msg.get("interaction_id")
                             if interaction_id and not msg.get("rated", False):
-                                st.caption(txt['feedback_question'])
-                                col1, col2, col3 = st.columns([1, 1, 4])
-                                with col1:
-                                    if st.button("👍", key=f"thumbs_up_{msg_idx}", help="Útil / Helpful"):
-                                        session_id = get_session_id()
-                                        if update_rating(session_id, interaction_id, 5):
-                                            st.session_state.messages[msg_idx]["rated"] = True
-                                            st.session_state.messages[msg_idx]["rating"] = 5
-                                            st.rerun()
-                                with col2:
-                                    if st.button("👎", key=f"thumbs_down_{msg_idx}", help="No útil / Not helpful"):
-                                        session_id = get_session_id()
-                                        if update_rating(session_id, interaction_id, 1):
-                                            st.session_state.messages[msg_idx]["rated"] = True
-                                            st.session_state.messages[msg_idx]["rating"] = 1
+                                # Check if user clicked thumbs down and wants to add comment
+                                pending_feedback_key = f"pending_feedback_{msg_idx}"
+
+                                if st.session_state.get(pending_feedback_key):
+                                    # Show comment form for negative feedback
+                                    st.caption(txt['feedback_comment_prompt'])
+                                    comment = st.text_area(
+                                        txt['feedback_placeholder'],
+                                        key=f"comment_{msg_idx}",
+                                        height=80
+                                    )
+                                    col_submit, col_skip = st.columns([1, 1])
+                                    with col_submit:
+                                        if st.button(txt['feedback_submit'], key=f"submit_feedback_{msg_idx}", type="primary"):
+                                            session_id = get_session_id()
+                                            if update_rating(session_id, interaction_id, 1, comment):
+                                                st.session_state.messages[msg_idx]["rated"] = True
+                                                st.session_state.messages[msg_idx]["rating"] = 1
+                                                st.session_state[pending_feedback_key] = False
+                                                st.rerun()
+                                    with col_skip:
+                                        if st.button(txt['feedback_skip'], key=f"skip_feedback_{msg_idx}"):
+                                            session_id = get_session_id()
+                                            if update_rating(session_id, interaction_id, 1, ""):
+                                                st.session_state.messages[msg_idx]["rated"] = True
+                                                st.session_state.messages[msg_idx]["rating"] = 1
+                                                st.session_state[pending_feedback_key] = False
+                                                st.rerun()
+                                else:
+                                    # Show rating buttons
+                                    st.caption(txt['feedback_question'])
+                                    col1, col2, col3 = st.columns([1, 1, 4])
+                                    with col1:
+                                        if st.button("👍", key=f"thumbs_up_{msg_idx}", help="Útil / Helpful"):
+                                            session_id = get_session_id()
+                                            if update_rating(session_id, interaction_id, 5):
+                                                st.session_state.messages[msg_idx]["rated"] = True
+                                                st.session_state.messages[msg_idx]["rating"] = 5
+                                                st.rerun()
+                                    with col2:
+                                        if st.button("👎", key=f"thumbs_down_{msg_idx}", help="No útil / Not helpful"):
+                                            # Show comment form instead of immediate submission
+                                            st.session_state[pending_feedback_key] = True
                                             st.rerun()
                             elif msg.get("rated", False):
                                 rating = msg.get("rating", 0)
