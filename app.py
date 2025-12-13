@@ -778,13 +778,81 @@ Response (in English):
 # =============================================================================
 # BALANCED RETRIEVER / RETRIEVER BALANCEADO
 # =============================================================================
+
+def extract_article_references(query: str) -> List[str]:
+    """
+    Extract article references from query (e.g., C.21.12.4.4, A.3.2, 25.4.2.1).
+
+    Returns list of article patterns to search for.
+    """
+    import re
+
+    # Patterns for NSR-10 articles (e.g., C.21.12.4.4, A.3.2.1, G.1.2)
+    # and ACI-318 sections (e.g., 25.4.2.1, 18.7.5.2)
+    patterns = [
+        r'[A-Z]\.\d+(?:\.\d+)+',  # NSR-10 style: C.21.12.4.4, A.3.2.1
+        r'\d+\.\d+(?:\.\d+)+',     # ACI-318 style: 25.4.2.1, 18.7.5.2
+    ]
+
+    references = []
+    for pattern in patterns:
+        matches = re.findall(pattern, query)
+        references.extend(matches)
+
+    return list(set(references))
+
+
+def keyword_search_documents(vectorstore, references: List[str], code_filter: str) -> List[Document]:
+    """
+    Search for documents containing specific article references.
+    This is a direct text search, not semantic search.
+    """
+    if not references:
+        return []
+
+    found_docs = []
+
+    try:
+        # Get the collection for direct access
+        collection = vectorstore._collection
+        all_data = collection.get(include=["documents", "metadatas"])
+
+        # Determine which codes to include
+        include_nsr = code_filter in ["both", "nsr"]
+        include_aci = code_filter in ["both", "aci"]
+
+        for doc_content, metadata in zip(all_data['documents'], all_data['metadatas']):
+            code = metadata.get('code', '')
+
+            # Check code filter
+            if code == 'NSR-10' and not include_nsr:
+                continue
+            if code == 'ACI-318' and not include_aci:
+                continue
+
+            # Check if any reference is in this document
+            for ref in references:
+                if ref in doc_content:
+                    # Create a Document object
+                    found_docs.append(Document(
+                        page_content=doc_content,
+                        metadata=metadata
+                    ))
+                    break  # Don't add same doc multiple times
+
+    except Exception:
+        pass
+
+    return found_docs
+
+
 class BalancedCodeRetriever(BaseRetriever):
     """
-    Custom retriever that fetches documents from NSR-10 and/or ACI-318
-    based on the code_filter parameter.
+    Hybrid retriever that combines keyword search for article references
+    with semantic search for general queries.
 
-    Retriever personalizado que obtiene documentos de NSR-10 y/o ACI-318
-    según el parámetro code_filter.
+    Retriever híbrido que combina búsqueda por palabras clave para referencias
+    de artículos con búsqueda semántica para consultas generales.
     """
     vectorstore: Chroma = Field(description="The Chroma vectorstore")
     k_per_code: int = Field(default=4, description="Number of documents to retrieve per code")
@@ -795,16 +863,38 @@ class BalancedCodeRetriever(BaseRetriever):
 
     def _get_relevant_documents(self, query: str) -> List[Document]:
         """
-        Retrieve documents based on code_filter setting.
+        Retrieve documents using hybrid approach:
+        1. First, extract article references and do keyword search
+        2. Then, do semantic search for remaining context
+        3. Combine and deduplicate results
         """
         all_docs = []
+        seen_pages = set()  # Track pages to avoid duplicates
 
-        # Determine which codes to retrieve based on code_filter
+        # Step 1: Extract article references and do keyword search
+        references = extract_article_references(query)
+        if references:
+            keyword_docs = keyword_search_documents(
+                self.vectorstore,
+                references,
+                self.code_filter
+            )
+            for doc in keyword_docs:
+                page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+                if page_key not in seen_pages:
+                    seen_pages.add(page_key)
+                    all_docs.append(doc)
+
+        # Step 2: Semantic search for additional context
         retrieve_nsr = self.code_filter in ["both", "nsr"]
         retrieve_aci = self.code_filter in ["both", "aci"]
 
+        # Adjust k based on how many keyword results we found
+        keyword_count = len(all_docs)
+        remaining_k = max(2, self.k_per_code - keyword_count // 2)
+
         # When filtering to single code, retrieve more documents
-        k = self.k_per_code if self.code_filter == "both" else self.k_per_code * 2
+        k = remaining_k if self.code_filter == "both" else remaining_k * 2
 
         # Retrieve from NSR-10
         if retrieve_nsr:
@@ -814,7 +904,11 @@ class BalancedCodeRetriever(BaseRetriever):
                     k=k,
                     filter={"code": "NSR-10"}
                 )
-                all_docs.extend(nsr_docs)
+                for doc in nsr_docs:
+                    page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+                    if page_key not in seen_pages:
+                        seen_pages.add(page_key)
+                        all_docs.append(doc)
             except Exception:
                 pass
 
@@ -826,7 +920,11 @@ class BalancedCodeRetriever(BaseRetriever):
                     k=k,
                     filter={"code": "ACI-318"}
                 )
-                all_docs.extend(aci_docs)
+                for doc in aci_docs:
+                    page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+                    if page_key not in seen_pages:
+                        seen_pages.add(page_key)
+                        all_docs.append(doc)
             except Exception:
                 pass
 
