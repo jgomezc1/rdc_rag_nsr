@@ -107,6 +107,14 @@ Las respuestas están estructuradas para distinguir claramente entre ambas fuent
         "feedback_skip": "Omitir",
         "feedback_comment_prompt": "¿Qué podría mejorar? (opcional)",
         "feedback_error": "Error al guardar feedback. Intenta de nuevo.",
+        "expand_references_label": "Expandir referencias cruzadas",
+        "expand_references_help": """**Expandir referencias cruzadas**: Cuando está activado, el sistema busca automáticamente los artículos referenciados dentro de los documentos encontrados.
+
+Esto proporciona contexto adicional cuando un artículo cita otros artículos (ej: C.21.12.4.4 → C.21.6.4.2 → C.7.10.4), pero puede aumentar el tiempo de respuesta.""",
+        "primary_source_label": "Fuente primaria",
+        "referenced_source_label": "Referencia cruzada",
+        "referenced_by_label": "Referenciado por",
+        "expansion_stats": "referencias adicionales encontradas",
     },
     "en": {
         "page_title": "Normative Assistant NSR-10 + ACI-318",
@@ -156,6 +164,14 @@ Responses are structured to clearly distinguish between both sources.""",
         "feedback_skip": "Skip",
         "feedback_comment_prompt": "What could be improved? (optional)",
         "feedback_error": "Error saving feedback. Please try again.",
+        "expand_references_label": "Expand cross-references",
+        "expand_references_help": """**Expand cross-references**: When enabled, the system automatically fetches articles referenced within the retrieved documents.
+
+This provides additional context when an article cites other articles (e.g., C.21.12.4.4 → C.21.6.4.2 → C.7.10.4), but may increase response time.""",
+        "primary_source_label": "Primary source",
+        "referenced_source_label": "Cross-reference",
+        "referenced_by_label": "Referenced by",
+        "expansion_stats": "additional references found",
     }
 }
 
@@ -802,6 +818,28 @@ def extract_article_references(query: str) -> List[str]:
     return list(set(references))
 
 
+def categorize_reference_code(reference: str, source_code: str = None) -> str:
+    """
+    Determine which code a reference belongs to based on its pattern.
+
+    Args:
+        reference: Article reference string (e.g., "C.21.12.4.4" or "25.4.2.1")
+        source_code: Code of the document where reference was found (fallback)
+
+    Returns:
+        "NSR-10" or "ACI-318"
+    """
+    import re
+    # NSR-10 pattern: starts with letter (C.21.12.4.4, A.3.2.1)
+    if re.match(r'^[A-Z]\.', reference):
+        return "NSR-10"
+    # ACI-318 pattern: starts with number (25.4.2.1)
+    elif re.match(r'^\d+\.', reference):
+        return "ACI-318"
+    # Fallback to source code if ambiguous
+    return source_code or "NSR-10"
+
+
 def keyword_search_documents(vectorstore, references: List[str], code_filter: str) -> List[Document]:
     """
     Search for documents containing specific article references.
@@ -846,6 +884,135 @@ def keyword_search_documents(vectorstore, references: List[str], code_filter: st
     return found_docs
 
 
+def resolve_references_recursively(
+    vectorstore,
+    initial_docs: List[Document],
+    max_articles: int = 15
+) -> tuple:
+    """
+    Recursively resolve article references within documents.
+    Only follows references within the same code (NSR->NSR, ACI->ACI).
+
+    Args:
+        vectorstore: Chroma vector database
+        initial_docs: Primary retrieved documents
+        max_articles: Maximum total articles to fetch (cap)
+
+    Returns:
+        Tuple of:
+        - all_docs: List of all documents (primary + referenced)
+        - reference_chain: Dict mapping article refs to their referencing articles
+    """
+    from collections import deque
+
+    all_docs = list(initial_docs)
+    reference_chain = {}  # {referenced_article: [list of articles that reference it]}
+
+    # Track visited articles by their references found in content
+    visited_refs = set()
+
+    # Track seen pages to avoid duplicate documents
+    seen_pages = set()
+    for doc in initial_docs:
+        page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+        seen_pages.add(page_key)
+
+    # Extract initial references from primary documents
+    pending_refs = deque()  # (reference, source_article, source_code)
+
+    for doc in initial_docs:
+        doc_code = doc.metadata.get('code', '')
+        refs_in_doc = extract_article_references(doc.page_content)
+        for ref in refs_in_doc:
+            ref_code = categorize_reference_code(ref, doc_code)
+            # Only follow same-code references (NSR->NSR, ACI->ACI)
+            if ref_code == doc_code and ref not in visited_refs:
+                # Find a reference from the source doc to use as "referenced by"
+                source_refs = extract_article_references(doc.page_content)
+                source_ref = source_refs[0] if source_refs else f"Page {doc.metadata.get('page', 'N/A')}"
+                pending_refs.append((ref, source_ref, doc_code))
+
+    # BFS to resolve references
+    while pending_refs and len(all_docs) < max_articles:
+        ref, source_ref, target_code = pending_refs.popleft()
+
+        if ref in visited_refs:
+            continue
+
+        visited_refs.add(ref)
+
+        # Search for documents containing this reference
+        code_filter = "nsr" if target_code == "NSR-10" else "aci"
+        found_docs = keyword_search_documents(vectorstore, [ref], code_filter)
+
+        for doc in found_docs:
+            if len(all_docs) >= max_articles:
+                break
+
+            page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+            if page_key in seen_pages:
+                continue
+
+            seen_pages.add(page_key)
+
+            # Track reference chain
+            if ref not in reference_chain:
+                reference_chain[ref] = []
+            if source_ref not in reference_chain[ref]:
+                reference_chain[ref].append(source_ref)
+
+            # Mark as referenced document
+            doc.metadata['source_type'] = 'referenced'
+            doc.metadata['referenced_by'] = reference_chain[ref].copy()
+            all_docs.append(doc)
+
+            # Extract new references from this document for further expansion
+            doc_code = doc.metadata.get('code', '')
+            new_refs = extract_article_references(doc.page_content)
+            for new_ref in new_refs:
+                new_ref_code = categorize_reference_code(new_ref, doc_code)
+                # Only follow same-code references
+                if new_ref_code == doc_code and new_ref not in visited_refs:
+                    pending_refs.append((new_ref, ref, doc_code))
+
+    return all_docs, reference_chain
+
+
+def enrich_documents_with_reference_metadata(
+    primary_docs: List[Document],
+    all_docs: List[Document],
+    reference_chain: dict
+) -> List[Document]:
+    """
+    Enrich documents with metadata indicating if they are primary or referenced.
+
+    Args:
+        primary_docs: Documents from initial retrieval
+        all_docs: All documents including referenced ones
+        reference_chain: Dict mapping article refs to their referencing articles
+
+    Returns:
+        List of all documents with enriched metadata
+    """
+    primary_pages = set()
+    for doc in primary_docs:
+        page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+        primary_pages.add(page_key)
+
+    enriched_docs = []
+    for doc in all_docs:
+        page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+
+        if page_key in primary_pages:
+            doc.metadata['source_type'] = 'primary'
+            doc.metadata['referenced_by'] = []
+        # Referenced docs already have metadata set in resolve_references_recursively
+
+        enriched_docs.append(doc)
+
+    return enriched_docs
+
+
 class BalancedCodeRetriever(BaseRetriever):
     """
     Hybrid retriever that combines keyword search for article references
@@ -857,6 +1024,8 @@ class BalancedCodeRetriever(BaseRetriever):
     vectorstore: Chroma = Field(description="The Chroma vectorstore")
     k_per_code: int = Field(default=4, description="Number of documents to retrieve per code")
     code_filter: str = Field(default="both", description="Which codes to retrieve: 'both', 'nsr', or 'aci'")
+    expand_references: bool = Field(default=False, description="Whether to expand article cross-references")
+    max_expanded_articles: int = Field(default=15, description="Maximum articles after expansion")
 
     class Config:
         arbitrary_types_allowed = True
@@ -928,6 +1097,20 @@ class BalancedCodeRetriever(BaseRetriever):
             except Exception:
                 pass
 
+        # Step 3: Expand references if enabled
+        if self.expand_references and all_docs:
+            primary_docs = list(all_docs)  # Keep copy of primary docs
+            expanded_docs, reference_chain = resolve_references_recursively(
+                self.vectorstore,
+                all_docs,
+                max_articles=self.max_expanded_articles
+            )
+            all_docs = enrich_documents_with_reference_metadata(
+                primary_docs,
+                expanded_docs,
+                reference_chain
+            )
+
         return all_docs
 
 
@@ -959,7 +1142,7 @@ def get_llm():
     )
 
 
-def get_prompt_template(response_type: str, code_source: str, language: str) -> PromptTemplate:
+def get_prompt_template(response_type: str, code_source: str, language: str, expand_references: bool = False) -> PromptTemplate:
     """
     Get the appropriate prompt template based on response type, code source, and language.
 
@@ -967,6 +1150,7 @@ def get_prompt_template(response_type: str, code_source: str, language: str) -> 
         response_type: "dictionary" (citations only) or "recommendations" (with recommendations)
         code_source: "both", "nsr", or "aci"
         language: "es" or "en"
+        expand_references: Whether expanded reference context is included
     """
     # Determine if dictionary mode (citations only) or recommendations mode
     is_dictionary = "citas" in response_type.lower() or "citations" in response_type.lower()
@@ -996,6 +1180,42 @@ def get_prompt_template(response_type: str, code_source: str, language: str) -> 
             template = PROMPT_NSR10_SOLO_ES if language == "es" else PROMPT_NSR10_SOLO_EN
         else:  # is_aci_only
             template = PROMPT_ACI318_SOLO_ES if language == "es" else PROMPT_ACI318_SOLO_EN
+
+    # Add expanded context instructions if reference expansion is enabled
+    if expand_references:
+        if language == "es":
+            expanded_instructions = """
+
+CONTEXTO EXPANDIDO CON REFERENCIAS CRUZADAS:
+Los fragmentos del contexto están marcados como [PRIMARY] o [REFERENCED by X.X.X]:
+- [PRIMARY]: Documentos encontrados directamente para tu consulta
+- [REFERENCED by X.X.X]: Documentos referenciados por otros artículos (la cadena de referencias)
+
+REGLAS PARA CONTEXTO EXPANDIDO:
+1. Prioriza siempre las fuentes [PRIMARY] para responder la pregunta principal.
+2. Usa las fuentes [REFERENCED] para proporcionar contexto adicional o clarificar referencias cruzadas.
+3. Al citar una fuente [REFERENCED], menciona que proviene de una referencia cruzada (ej: "según C.7.10.4, referenciado por C.21.6.4.2").
+4. Si la respuesta depende principalmente de fuentes [REFERENCED], aclara que la información viene de artículos relacionados.
+
+"""
+        else:
+            expanded_instructions = """
+
+EXPANDED CONTEXT WITH CROSS-REFERENCES:
+Context fragments are marked as [PRIMARY] or [REFERENCED by X.X.X]:
+- [PRIMARY]: Documents found directly for your query
+- [REFERENCED by X.X.X]: Documents referenced by other articles (the reference chain)
+
+RULES FOR EXPANDED CONTEXT:
+1. Always prioritize [PRIMARY] sources to answer the main question.
+2. Use [REFERENCED] sources to provide additional context or clarify cross-references.
+3. When citing a [REFERENCED] source, mention it comes from a cross-reference (e.g., "per C.7.10.4, referenced by C.21.6.4.2").
+4. If the answer relies primarily on [REFERENCED] sources, clarify that the information comes from related articles.
+
+"""
+        # Insert the expanded instructions before the context section
+        template = template.replace("Contexto normativo:", expanded_instructions + "Contexto normativo:")
+        template = template.replace("Normative context:", expanded_instructions + "Normative context:")
 
     return PromptTemplate(
         input_variables=["context", "question", "chat_history"],
@@ -1064,7 +1284,7 @@ def build_contextualized_query(question: str, chat_history: list, llm) -> str:
     return question
 
 
-def query_with_sources(vectordb, llm, question: str, response_type: str, code_source: str, language: str, chat_history: list) -> dict:
+def query_with_sources(vectordb, llm, question: str, response_type: str, code_source: str, language: str, chat_history: list, expand_references: bool = False) -> dict:
     """
     Query the vectorstore and generate a response with sources.
 
@@ -1076,6 +1296,7 @@ def query_with_sources(vectordb, llm, question: str, response_type: str, code_so
         code_source: Code source selection from UI (e.g., "NSR-10 + ACI-318", "Solo NSR-10", "Solo ACI-318")
         language: "es" or "en"
         chat_history: List of previous messages for conversational context
+        expand_references: Whether to expand cross-references in retrieved documents
 
     Returns:
         dict with "answer" and "source_documents"
@@ -1091,30 +1312,43 @@ def query_with_sources(vectordb, llm, question: str, response_type: str, code_so
     else:
         code_filter = "both"
 
-    # Create retriever with appropriate code filter
+    # Create retriever with appropriate code filter and expansion setting
     retriever = BalancedCodeRetriever(
         vectorstore=vectordb,
         k_per_code=4,  # 4 from each code when both, 8 when single code
-        code_filter=code_filter
+        code_filter=code_filter,
+        expand_references=expand_references,
+        max_expanded_articles=15
     )
 
     # Retrieve relevant documents using contextualized query
     source_documents = retriever.invoke(search_query)
 
-    # Build context from documents with metadata
+    # Build context from documents with metadata (including source type if expanded)
     context_parts = []
     for doc in source_documents:
         code = doc.metadata.get('code', 'Unknown')
         page = doc.metadata.get('page', 'N/A')
-        context_parts.append(f"[code={code}, page={page}]\n{doc.page_content}")
+        source_type = doc.metadata.get('source_type', 'primary')
+        referenced_by = doc.metadata.get('referenced_by', [])
+
+        # Add source type annotation if expansion is enabled
+        if expand_references:
+            if source_type == 'referenced' and referenced_by:
+                ref_info = f"[REFERENCED by {', '.join(referenced_by)}]"
+            else:
+                ref_info = "[PRIMARY]"
+            context_parts.append(f"[code={code}, page={page}] {ref_info}\n{doc.page_content}")
+        else:
+            context_parts.append(f"[code={code}, page={page}]\n{doc.page_content}")
 
     context = "\n\n---\n\n".join(context_parts)
 
     # Format chat history
     formatted_history = format_chat_history(chat_history, language)
 
-    # Get prompt and generate response
-    prompt = get_prompt_template(response_type, code_source, language)
+    # Get prompt and generate response (with expanded context instructions if enabled)
+    prompt = get_prompt_template(response_type, code_source, language, expand_references)
     chain = prompt | llm | StrOutputParser()
 
     answer = chain.invoke({
@@ -1205,6 +1439,15 @@ def main():
 
         st.divider()
 
+        # Reference expansion toggle
+        expand_references = st.toggle(
+            txt['expand_references_label'],
+            value=False,
+            help=txt['expand_references_help']
+        )
+
+        st.divider()
+
         # Clear conversation button
         if st.button(txt['clear_btn'], use_container_width=True):
             st.session_state.messages = []
@@ -1281,25 +1524,43 @@ def main():
                                     aci_sources = [s for s in msg["sources"] if s.get("code") == "ACI-318"]
                                     other_sources = [s for s in msg["sources"] if s.get("code") not in ["NSR-10", "ACI-318"]]
 
+                                    # Helper function to display sources with type distinction
+                                    def display_sources_with_type(sources_list, header):
+                                        if not sources_list:
+                                            return
+                                        st.markdown(f"#### {header}")
+
+                                        # Separate primary and referenced
+                                        primary = [s for s in sources_list if s.get("source_type", "primary") == "primary"]
+                                        referenced = [s for s in sources_list if s.get("source_type") == "referenced"]
+
+                                        # Display primary sources first
+                                        if primary:
+                                            for i, source in enumerate(primary, 1):
+                                                badge = f"🔹 {txt['primary_source_label']}" if any(s.get("source_type") == "referenced" for s in sources_list) else ""
+                                                st.markdown(f"**{txt['fragment_label']} {i}** - {txt['page_label']} {source['page']} {badge}")
+                                                st.text(source["content"][:500] + "..." if len(source["content"]) > 500 else source["content"])
+                                                if i < len(primary) or referenced:
+                                                    st.divider()
+
+                                        # Display referenced sources
+                                        if referenced:
+                                            for i, source in enumerate(referenced, 1):
+                                                ref_by = source.get("referenced_by", [])
+                                                ref_info = f"🔸 {txt['referenced_by_label']}: {', '.join(ref_by)}" if ref_by else f"🔸 {txt['referenced_source_label']}"
+                                                st.markdown(f"**{txt['fragment_label']} {len(primary) + i}** - {txt['page_label']} {source['page']} {ref_info}")
+                                                st.text(source["content"][:500] + "..." if len(source["content"]) > 500 else source["content"])
+                                                if i < len(referenced):
+                                                    st.divider()
+
                                     # NSR-10 sources
-                                    if nsr_sources:
-                                        st.markdown(f"#### {txt['nsr_sources_header']}")
-                                        for i, source in enumerate(nsr_sources, 1):
-                                            st.markdown(f"**{txt['fragment_label']} {i}** - {txt['page_label']} {source['page']}")
-                                            st.text(source["content"][:500] + "..." if len(source["content"]) > 500 else source["content"])
-                                            if i < len(nsr_sources):
-                                                st.divider()
+                                    display_sources_with_type(nsr_sources, txt['nsr_sources_header'])
 
                                     # ACI-318 sources
                                     if aci_sources:
                                         if nsr_sources:
                                             st.divider()
-                                        st.markdown(f"#### {txt['aci_sources_header']}")
-                                        for i, source in enumerate(aci_sources, 1):
-                                            st.markdown(f"**{txt['fragment_label']} {i}** - {txt['page_label']} {source['page']}")
-                                            st.text(source["content"][:500] + "..." if len(source["content"]) > 500 else source["content"])
-                                            if i < len(aci_sources):
-                                                st.divider()
+                                        display_sources_with_type(aci_sources, txt['aci_sources_header'])
 
                                     # Other sources
                                     if other_sources:
@@ -1381,19 +1642,23 @@ def main():
 
         with st.spinner(txt['spinner_text']):
             # Pass previous messages for conversational context
-            result = query_with_sources(vectordb, llm, query_to_process, response_type, code_source, lang, previous_messages)
+            result = query_with_sources(vectordb, llm, query_to_process, response_type, code_source, lang, previous_messages, expand_references)
 
             answer = result["answer"]
             sources = []
 
-            # Extract source information with code
+            # Extract source information with code and reference metadata
             for doc in result.get("source_documents", []):
                 page = doc.metadata.get("page", "N/A")
                 code = doc.metadata.get("code", "Unknown")
+                source_type = doc.metadata.get("source_type", "primary")
+                referenced_by = doc.metadata.get("referenced_by", [])
                 sources.append({
                     "page": page,
                     "code": code,
-                    "content": doc.page_content
+                    "content": doc.page_content,
+                    "source_type": source_type,
+                    "referenced_by": referenced_by
                 })
 
             # Separate sources by code for logging
