@@ -1083,6 +1083,40 @@ def extract_article_references(query: str) -> List[str]:
     return list(set(references))
 
 
+def extract_section_headers(content: str) -> List[str]:
+    """
+    Extract section headers from document content.
+
+    Looks for patterns like:
+    - # 11.7.3 Section title (markdown headers)
+    - C.21.12.4.4 (NSR-10 article references)
+    - 25.4.2.1 (ACI-318 section references)
+
+    Returns list of unique section/article numbers found.
+    """
+    import re
+
+    sections = []
+
+    # Pattern for markdown headers with section numbers (e.g., "# 11.7.3 Title")
+    header_pattern = r'#\s*(\d+\.\d+(?:\.\d+)*)'
+    sections.extend(re.findall(header_pattern, content))
+
+    # Pattern for NSR-10 articles at start of line or after whitespace (e.g., "C.21.12.4.4")
+    nsr_pattern = r'(?:^|\s)([A-Z]\.\d+(?:\.\d+)+)'
+    sections.extend(re.findall(nsr_pattern, content))
+
+    # Pattern for ACI-318 sections at start of line (e.g., "25.4.2.1 Text")
+    aci_pattern = r'(?:^|\n)(\d+\.\d+(?:\.\d+)+)\s+[A-Z]'
+    sections.extend(re.findall(aci_pattern, content))
+
+    # Remove duplicates and sort
+    unique_sections = sorted(set(sections), key=lambda x: [int(p) if p.isdigit() else p for p in re.split(r'[.\s]', x)])
+
+    # Return first 3 sections to keep it compact
+    return unique_sections[:3]
+
+
 def categorize_reference_code(reference: str, source_code: str = None) -> str:
     """
     Determine which code a reference belongs to based on its pattern.
@@ -1832,61 +1866,55 @@ def main():
                         with st.chat_message("assistant"):
                             st.markdown(normalize_latex_output(msg["content"]))
 
-                            # Show sources grouped by code
+                            # Show sources grouped by code (compact format)
                             if msg.get("sources"):
                                 with st.expander(txt['sources_expander']):
                                     nsr_sources = [s for s in msg["sources"] if s.get("code") == "NSR-10"]
                                     aci_sources = [s for s in msg["sources"] if s.get("code") == "ACI-318"]
                                     other_sources = [s for s in msg["sources"] if s.get("code") not in ["NSR-10", "ACI-318"]]
 
-                                    # Helper function to display sources with type distinction
-                                    def display_sources_with_type(sources_list, header):
+                                    # Helper function to display sources in compact format
+                                    def display_sources_compact(sources_list, header):
                                         if not sources_list:
                                             return
-                                        st.markdown(f"#### {header}")
+                                        st.markdown(f"**{header}**")
 
                                         # Separate primary and referenced
                                         primary = [s for s in sources_list if s.get("source_type", "primary") == "primary"]
                                         referenced = [s for s in sources_list if s.get("source_type") == "referenced"]
 
-                                        # Display primary sources first
-                                        if primary:
-                                            for i, source in enumerate(primary, 1):
-                                                badge = f"🔹 {txt['primary_source_label']}" if any(s.get("source_type") == "referenced" for s in sources_list) else ""
-                                                st.markdown(f"**{txt['fragment_label']} {i}** - {txt['page_label']} {source['page']} {badge}")
-                                                st.text(source["content"][:500] + "..." if len(source["content"]) > 500 else source["content"])
-                                                if i < len(primary) or referenced:
-                                                    st.divider()
+                                        # Display primary sources
+                                        for source in primary:
+                                            sections = source.get("sections", [])
+                                            section_str = f" — §{', §'.join(sections)}" if sections else ""
+                                            st.markdown(f"- {txt['page_label']} {source['page']}{section_str}")
 
-                                        # Display referenced sources
-                                        if referenced:
-                                            for i, source in enumerate(referenced, 1):
-                                                ref_by = source.get("referenced_by", [])
-                                                ref_info = f"🔸 {txt['referenced_by_label']}: {', '.join(ref_by)}" if ref_by else f"🔸 {txt['referenced_source_label']}"
-                                                st.markdown(f"**{txt['fragment_label']} {len(primary) + i}** - {txt['page_label']} {source['page']} {ref_info}")
-                                                st.text(source["content"][:500] + "..." if len(source["content"]) > 500 else source["content"])
-                                                if i < len(referenced):
-                                                    st.divider()
+                                        # Display referenced sources with indicator
+                                        for source in referenced:
+                                            sections = source.get("sections", [])
+                                            section_str = f" — §{', §'.join(sections)}" if sections else ""
+                                            ref_by = source.get("referenced_by", [])
+                                            ref_str = f" *(↩ {', '.join(ref_by)})*" if ref_by else " *(ref)*"
+                                            st.markdown(f"- {txt['page_label']} {source['page']}{section_str}{ref_str}")
 
                                     # NSR-10 sources
-                                    display_sources_with_type(nsr_sources, txt['nsr_sources_header'])
+                                    display_sources_compact(nsr_sources, txt['nsr_sources_header'])
 
                                     # ACI-318 sources
                                     if aci_sources:
                                         if nsr_sources:
-                                            st.divider()
-                                        display_sources_with_type(aci_sources, txt['aci_sources_header'])
+                                            st.write("")  # Small spacing
+                                        display_sources_compact(aci_sources, txt['aci_sources_header'])
 
                                     # Other sources
                                     if other_sources:
                                         if nsr_sources or aci_sources:
-                                            st.divider()
-                                        st.markdown(f"#### {txt['other_sources_header']}")
-                                        for i, source in enumerate(other_sources, 1):
-                                            st.markdown(f"**{txt['fragment_label']} {i}** ({source.get('code', 'N/A')}) - {txt['page_label']} {source['page']}")
-                                            st.text(source["content"][:500] + "..." if len(source["content"]) > 500 else source["content"])
-                                            if i < len(other_sources):
-                                                st.divider()
+                                            st.write("")
+                                        st.markdown(f"**{txt['other_sources_header']}**")
+                                        for source in other_sources:
+                                            sections = source.get("sections", [])
+                                            section_str = f" — §{', §'.join(sections)}" if sections else ""
+                                            st.markdown(f"- {txt['page_label']} {source['page']}{section_str}")
 
                             # Feedback rating buttons
                             interaction_id = msg.get("interaction_id")
@@ -1968,10 +1996,11 @@ def main():
                 code = doc.metadata.get("code", "Unknown")
                 source_type = doc.metadata.get("source_type", "primary")
                 referenced_by = doc.metadata.get("referenced_by", [])
+                sections = extract_section_headers(doc.page_content)
                 sources.append({
                     "page": page,
                     "code": code,
-                    "content": doc.page_content,
+                    "sections": sections,
                     "source_type": source_type,
                     "referenced_by": referenced_by
                 })
