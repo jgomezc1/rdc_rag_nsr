@@ -116,6 +116,10 @@ Esto proporciona contexto adicional cuando un artículo cita otros artículos (e
         "referenced_source_label": "Referencia cruzada",
         "referenced_by_label": "Referenciado por",
         "expansion_stats": "referencias adicionales encontradas",
+        "reference_chain_header": "Cadena de referencias",
+        "reference_chain_empty": "No se encontraron referencias cruzadas",
+        "primary_marker": "consulta directa",
+        "advanced_options_header": "Opciones avanzadas",
     },
     "en": {
         "page_title": "Normative Assistant NSR-10 + ACI-318",
@@ -173,6 +177,10 @@ This provides additional context when an article cites other articles (e.g., C.2
         "referenced_source_label": "Cross-reference",
         "referenced_by_label": "Referenced by",
         "expansion_stats": "additional references found",
+        "reference_chain_header": "Reference Chain",
+        "reference_chain_empty": "No cross-references found",
+        "primary_marker": "direct query",
+        "advanced_options_header": "Advanced Options",
     }
 }
 
@@ -1117,6 +1125,124 @@ def extract_section_headers(content: str) -> List[str]:
     return unique_sections[:3]
 
 
+def build_reference_chain_tree(sources: List[dict], txt: dict) -> str:
+    """
+    Build a visual tree representation of the reference chain.
+
+    Args:
+        sources: List of source dictionaries with keys: page, code, sections, source_type, referenced_by
+        txt: UI text dictionary for localization
+
+    Returns:
+        Formatted string with Unicode tree characters showing the reference chain
+    """
+    if not sources:
+        return ""
+
+    # Separate by code
+    nsr_sources = [s for s in sources if s.get("code") == "NSR-10"]
+    aci_sources = [s for s in sources if s.get("code") == "ACI-318"]
+
+    # Check if there are any referenced sources (cross-references were expanded)
+    has_references = any(s.get("source_type") == "referenced" for s in sources)
+    if not has_references:
+        return ""  # No chain to display if no cross-references
+
+    lines = []
+
+    def build_tree_for_code(code_sources: List[dict], code_name: str):
+        """Build tree for a single code (NSR-10 or ACI-318)."""
+        if not code_sources:
+            return []
+
+        tree_lines = []
+        tree_lines.append(f"**{code_name}**")
+
+        # Separate primary and referenced
+        primary = [s for s in code_sources if s.get("source_type", "primary") == "primary"]
+        referenced = [s for s in code_sources if s.get("source_type") == "referenced"]
+
+        if not primary and not referenced:
+            return []
+
+        # Build a map: section -> source info
+        section_to_source = {}
+        for s in code_sources:
+            sections = s.get("sections", [])
+            key = sections[0] if sections else f"Pág.{s.get('page', '?')}"
+            section_to_source[key] = s
+
+        # Build adjacency: referenced_by -> list of sections that reference it
+        # This creates child -> parent relationships
+        children_of = {}  # parent_section -> [child_sections]
+        root_sections = []  # sections with no parent (primary sources)
+
+        for s in code_sources:
+            sections = s.get("sections", [])
+            section_key = sections[0] if sections else f"Pág.{s.get('page', '?')}"
+            referenced_by = s.get("referenced_by", [])
+
+            if s.get("source_type") == "primary" or not referenced_by:
+                root_sections.append(section_key)
+            else:
+                # This source was referenced by other sections
+                for parent in referenced_by:
+                    if parent not in children_of:
+                        children_of[parent] = []
+                    if section_key not in children_of[parent]:
+                        children_of[parent].append(section_key)
+
+        # Remove duplicates from root
+        root_sections = list(dict.fromkeys(root_sections))
+
+        # Recursive function to build tree
+        def add_branch(section_key, prefix="", is_last=True):
+            branch_lines = []
+            source = section_to_source.get(section_key)
+
+            # Determine connector
+            connector = "└─" if is_last else "├─"
+
+            # Build the line
+            if source:
+                page = source.get("page", "?")
+                is_primary = source.get("source_type", "primary") == "primary"
+                marker = f" ← *{txt.get('primary_marker', 'direct query')}*" if is_primary else ""
+                branch_lines.append(f"{prefix}{connector} §{section_key} (Pág. {page}){marker}")
+            else:
+                # Section referenced but not found in our sources
+                branch_lines.append(f"{prefix}{connector} §{section_key}")
+
+            # Add children
+            children = children_of.get(section_key, [])
+            child_prefix = prefix + ("   " if is_last else "│  ")
+            for i, child in enumerate(children):
+                child_is_last = (i == len(children) - 1)
+                branch_lines.extend(add_branch(child, child_prefix, child_is_last))
+
+            return branch_lines
+
+        # Build tree from roots
+        for i, root in enumerate(root_sections):
+            is_last_root = (i == len(root_sections) - 1)
+            tree_lines.extend(add_branch(root, "", is_last_root))
+
+        return tree_lines
+
+    # Build trees for each code
+    nsr_tree = build_tree_for_code(nsr_sources, "NSR-10")
+    aci_tree = build_tree_for_code(aci_sources, "ACI-318")
+
+    if nsr_tree:
+        lines.extend(nsr_tree)
+    if aci_tree:
+        if nsr_tree:
+            lines.append("")  # Spacing between codes
+        lines.extend(aci_tree)
+
+    return "\n".join(lines) if lines else ""
+
+
 def categorize_reference_code(reference: str, source_code: str = None) -> str:
     """
     Determine which code a reference belongs to based on its pattern.
@@ -1333,18 +1459,50 @@ class BalancedCodeRetriever(BaseRetriever):
         """
         Retrieve documents using hybrid approach:
         1. First, extract article references and do keyword search
-        2. Then, do semantic search for remaining context
-        3. Combine and deduplicate results
+        2. Also search for regulatory terms (LEY 400, ARTÍCULO, etc.)
+        3. Then, do semantic search for remaining context
+        4. Combine and deduplicate results
         """
         all_docs = []
         seen_pages = set()  # Track pages to avoid duplicates
 
-        # Step 1: Extract article references and do keyword search
+        # Step 1a: Extract article references and do keyword search
         references = extract_article_references(query)
         if references:
             keyword_docs = keyword_search_documents(
                 self.vectorstore,
                 references,
+                self.code_filter
+            )
+            for doc in keyword_docs:
+                page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+                if page_key not in seen_pages:
+                    seen_pages.add(page_key)
+                    all_docs.append(doc)
+
+        # Step 1b: Search for regulatory keywords in query
+        # This helps find LEY 400 content, specific articles, or named sections
+        import re
+        query_lower = query.lower()
+        regulatory_keywords = []
+
+        # Check for regulatory document references
+        if 'ley 400' in query_lower or 'ley400' in query_lower:
+            regulatory_keywords.append('LEY 400')
+        if 'métodos alternos' in query_lower or 'metodos alternos' in query_lower:
+            regulatory_keywords.append('métodos alternos')
+        if 'materiales alternos' in query_lower:
+            regulatory_keywords.append('materiales alternos')
+
+        # Check for "ARTÍCULO X" patterns (written out, not just numbers)
+        articulo_match = re.search(r'art[íi]culo\s*(\d+)', query_lower)
+        if articulo_match:
+            regulatory_keywords.append(f'ARTÍCULO {articulo_match.group(1)}')
+
+        if regulatory_keywords:
+            keyword_docs = keyword_search_documents(
+                self.vectorstore,
+                regulatory_keywords,
                 self.code_filter
             )
             for doc in keyword_docs:
@@ -1788,7 +1946,8 @@ def main():
 
         st.divider()
 
-        # Reference expansion toggle
+        # Advanced options section
+        st.markdown(f"#### {txt['advanced_options_header']}")
         expand_references = st.toggle(
             txt['expand_references_label'],
             value=False,
@@ -1869,19 +2028,29 @@ def main():
                             # Show sources grouped by code (compact format)
                             if msg.get("sources"):
                                 with st.expander(txt['sources_expander']):
-                                    nsr_sources = [s for s in msg["sources"] if s.get("code") == "NSR-10"]
-                                    aci_sources = [s for s in msg["sources"] if s.get("code") == "ACI-318"]
-                                    other_sources = [s for s in msg["sources"] if s.get("code") not in ["NSR-10", "ACI-318"]]
+                                    sources_list = msg["sources"]
+
+                                    # Show reference chain tree if cross-references were expanded
+                                    chain_tree = build_reference_chain_tree(sources_list, txt)
+                                    if chain_tree:
+                                        st.markdown(f"**🔗 {txt['reference_chain_header']}**")
+                                        st.code(chain_tree, language=None)
+                                        st.divider()
+
+                                    # Compact list of sources
+                                    nsr_sources = [s for s in sources_list if s.get("code") == "NSR-10"]
+                                    aci_sources = [s for s in sources_list if s.get("code") == "ACI-318"]
+                                    other_sources = [s for s in sources_list if s.get("code") not in ["NSR-10", "ACI-318"]]
 
                                     # Helper function to display sources in compact format
-                                    def display_sources_compact(sources_list, header):
-                                        if not sources_list:
+                                    def display_sources_compact(src_list, header):
+                                        if not src_list:
                                             return
                                         st.markdown(f"**{header}**")
 
                                         # Separate primary and referenced
-                                        primary = [s for s in sources_list if s.get("source_type", "primary") == "primary"]
-                                        referenced = [s for s in sources_list if s.get("source_type") == "referenced"]
+                                        primary = [s for s in src_list if s.get("source_type", "primary") == "primary"]
+                                        referenced = [s for s in src_list if s.get("source_type") == "referenced"]
 
                                         # Display primary sources
                                         for source in primary:

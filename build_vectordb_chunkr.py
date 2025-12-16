@@ -117,6 +117,15 @@ def build_database(chunks: list, embeddings_model):
             if not content:
                 continue
 
+            # Augment content with code identifier for better semantic search
+            # This helps when users ask "what does NSR-10 say about X" but the
+            # chunk text doesn't explicitly mention "NSR-10" (e.g., LEY 400 content)
+            code = chunk.get('code', 'unknown')
+            if code == 'NSR-10' and 'nsr-10' not in content.lower() and 'nsr10' not in content.lower():
+                content = f"[NSR-10] {content}"
+            elif code == 'ACI-318' and 'aci-318' not in content.lower() and 'aci318' not in content.lower():
+                content = f"[ACI-318] {content}"
+
             # Build metadata
             metadata = {
                 "code": chunk.get('code', 'unknown'),
