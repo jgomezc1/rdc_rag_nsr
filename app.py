@@ -53,7 +53,8 @@ from pydantic import Field
 # =============================================================================
 MODEL_NAME = "gpt-4.1-mini"
 EMBEDDING_MODEL_NAME = "text-embedding-3-small"
-PERSIST_DIR = "combined_DB"  # Combined ChromaDB with NSR-10 and ACI-318
+PERSIST_DIR = "chroma_db_chunkr"  # ChromaDB built from Chunkr.ai output
+COLLECTION_NAME = "structural_codes_chunkr"
 
 # =============================================================================
 # UI TEXT DICTIONARIES / DICCIONARIOS DE TEXTO UI
@@ -792,6 +793,270 @@ Response (in English):
 """
 
 # =============================================================================
+# LATEX FORMATTING HELPER
+# =============================================================================
+
+def convert_latex_delimiters(text: str) -> str:
+    r"""
+    Convert LaTeX delimiters to Streamlit-compatible format.
+    Streamlit markdown uses $ for inline and $$ for display math.
+
+    Converts:
+    - \[...\] -> $$...$$  (display math)
+    - \(...\) -> $...$    (inline math)
+    """
+    import re
+
+    # Display math: \[...\] -> $$...$$
+    text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
+
+    # Inline math: \(...\) -> $...$
+    text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text, flags=re.DOTALL)
+
+    return text
+
+
+def normalize_latex_output(text: str) -> str:
+    r"""
+    Comprehensive post-processing of LLM output to ensure proper LaTeX rendering.
+
+    Fixes:
+    1. Converts remaining \[...\] and \(...\) to $$ and $
+    2. Wraps orphaned LaTeX commands in $ delimiters
+    3. Fixes broken/mixed delimiters like $$...$ or $...$$
+    4. Wraps structural engineering formulas (Vn, Vc, f'c, etc.)
+    """
+    import re
+
+    # Step 1: Convert any remaining \[...\] or \(...\) delimiters
+    text = convert_latex_delimiters(text)
+
+    # Step 2: Fix broken/malformed delimiters from source data
+    # These patterns handle common issues in NSR-10 source chunks
+    # ORDER IS IMPORTANT: Fix unclosed $ first, then fix mixed $$/$
+
+    # 2a. Fix unclosed $ at start of line followed by LaTeX content and newline
+    # Pattern: line starts with $ + space + LaTeX content (with backslash) + newline
+    # This is typically display math that should be $$...$$
+    # MUST RUN FIRST to prevent 2c/2d from matching across multiple equations
+    text = re.sub(
+        r'^(\$)\s+([^\n$]*\\[a-zA-Z][^\n$]*?)\s*$',
+        r'$$\2$$',
+        text,
+        flags=re.MULTILINE
+    )
+
+    # 2b. Fix unclosed $ at end of text with LaTeX content
+    # Pattern: $ + space + LaTeX content (with backslash) at very end
+    text = re.sub(
+        r'\$\s+([^$]*\\[a-zA-Z][^$]*?)\s*$',
+        r'$$\1$$',
+        text
+    )
+
+    # 2c. Fix $$ followed by content and single $ (should be $$...$$)
+    # Use non-greedy matching to handle multiple equations in same text
+    # IMPORTANT: Require content to start with a math-like character (backslash, letter,
+    # number, or opening bracket) to avoid matching closing $$ of one equation with
+    # opening $ of the next (e.g., "$$eq1$$, donde $eq2$" shouldn't match "$$, donde $")
+    text = re.sub(r'\$\$([\\a-zA-Z0-9({\[+\-][^$]*?)\$(?!\$)', r'$$\1$$', text)
+
+    # 2d. Fix single $ followed by content and $$ (should be $...$)
+    # Use non-greedy matching and require content without whitespace to avoid
+    # matching across separate equations like "$V$: $$equation$$"
+    text = re.sub(r'(?<!\$)\$([^$\s]+?)\$\$', r'$\1$', text)
+
+    # 2e. Fix display math written as $ content $ on its own line (should be $$...$$)
+    # This catches cases where someone used $ instead of $$ for display math
+    text = re.sub(
+        r'^(\$)\s+([^\n$]+?)\s+\$\s*$',
+        r'$$\2$$',
+        text,
+        flags=re.MULTILINE
+    )
+
+    # Step 3: Find and wrap orphaned LaTeX expressions
+    # These are LaTeX commands that appear outside of $ delimiters
+
+    # First, mark all properly delimited sections
+    placeholder_counter = [0]
+    protected = {}
+
+    def protect_delimited(match):
+        key = f"__PROTECTED_{placeholder_counter[0]}__"
+        placeholder_counter[0] += 1
+        protected[key] = match.group(0)
+        return key
+
+    # Protect $$...$$ and $...$
+    # Use non-greedy matching and DOTALL to handle multiline content
+    # Also handle edge case where content might have \$ escapes
+    text = re.sub(r'\$\$(?:[^$]|\$(?!\$))+?\$\$', protect_delimited, text, flags=re.DOTALL)
+    text = re.sub(r'(?<!\$)\$(?!\$)(?:[^$])+?\$(?!\$)', protect_delimited, text, flags=re.DOTALL)
+
+    # NOTE: We intentionally do NOT try to wrap complex LaTeX commands like \frac, \sqrt, etc.
+    # These often have nested braces that simple regex cannot handle correctly.
+    # Complex LaTeX from source documents should already have proper delimiters.
+    # We only wrap simple, standalone structural engineering patterns (Step 4).
+
+    # Step 4: Structural engineering specific patterns
+    # These patterns catch common formulas that LLM may write without LaTeX delimiters
+    # IMPORTANT: These only match OUTSIDE of LaTeX expressions (no backslash nearby)
+    # ORDER MATTERS: More specific/longer patterns must come before simpler ones
+
+    # Helper function to check if a match is inside LaTeX (has \ nearby)
+    def is_inside_latex(text, match_start, match_end, window=20):
+        """Check if match position is likely inside a LaTeX expression."""
+        start = max(0, match_start - window)
+        end = min(len(text), match_end + window)
+        context = text[start:end]
+        # If there's a backslash command nearby, it's probably LaTeX
+        return '\\' in context
+
+    # 4a. Chained comparisons with Greek letters and structural variables (MUST BE FIRST)
+    # Matches: ρ_min ≤ ρ ≤ ρ_max, ρ_min ≤ ρ, ρ ≤ ρ_max
+    # Only match if not inside LaTeX
+    chained_comparison_pattern = (
+        r'(?<!\$)'
+        r'('
+        r'[ρφλ]_?(?:min|max|b|s|bal)?'  # First term
+        r'\s*[≤≥<>]\s*'
+        r'[ρφλ]'  # Middle term
+        r'(?:\s*[≤≥<>]\s*[ρφλ]_?(?:min|max|b|s|bal)?)?'  # Optional third term
+        r')'
+        r'(?!\$)'
+    )
+
+    def wrap_if_not_latex(pattern, text):
+        """Wrap matches only if they're not inside LaTeX expressions."""
+        result = []
+        last_end = 0
+        for match in re.finditer(pattern, text):
+            result.append(text[last_end:match.start()])
+            if is_inside_latex(text, match.start(), match.end()):
+                result.append(match.group(0))  # Keep as-is
+            else:
+                result.append(f'${match.group(1)}$')  # Wrap
+            last_end = match.end()
+        result.append(text[last_end:])
+        return ''.join(result)
+
+    text = wrap_if_not_latex(chained_comparison_pattern, text)
+
+    # Re-protect newly created $...$ blocks to prevent subsequent patterns from breaking them
+    text = re.sub(r'(?<!\$)\$(?!\$)(?:[^$])+?\$(?!\$)', protect_delimited, text, flags=re.DOTALL)
+
+    # 4b. Equations with structural engineering variables
+    # Pattern: Variable = Expression (e.g., "Vn = Vc + Vs", "V_n = V_c + V_s")
+    # Only matches simple standalone equations, not inside LaTeX
+    structural_equation_pattern = (
+        r'(?<!\$)'  # Not already in LaTeX
+        r'(?<!\\)'  # Not preceded by backslash
+        r'('
+        r'[φϕ]?'  # Optional phi symbol
+        r'(?:[VMPNTCA]_?[nuscrwyeogpbj]|f\'_?c|f_?[yrc]|A_?[svgctp]|b_?w|ρ_?(?:min|max|b|s)?|λ)'  # Structural variables (simplified - no braces)
+        r'\s*'
+        r'[=≥≤><±+\-]'  # Operator
+        r'\s*'
+        r'[φϕ]?'
+        r'(?:[VMPNTCA]_?[nuscrwyeogpbj]|f\'_?c|f_?[yrc]|A_?[svgctp]|b_?w|ρ_?(?:min|max|b|s)?|λ|[\d.,]+)'  # Right side
+        r'(?:\s*[+\-×·*/]\s*[φϕ]?(?:[VMPNTCA]_?[nuscrwyeogpbj]|f\'_?c|f_?[yrc]|A_?[svgctp]|b_?w|ρ_?(?:min|max|b|s)?|λ|[\d.,]+))*'  # Additional terms
+        r')'
+        r'(?!\$)'  # Not already in LaTeX
+        r'(?!\\)'  # Not followed by backslash
+    )
+    text = wrap_if_not_latex(structural_equation_pattern, text)
+
+    # 4c. Standalone structural variables with subscripts (not in equations)
+    # Matches: V_n, V_c, V_s, M_n, M_u, A_s, A_v, f'_c, φV_n, etc.
+    # Only simple underscore subscripts, no braced subscripts (those are likely inside LaTeX)
+    structural_var_pattern = (
+        r'(?<![\\$\w{])'  # Not preceded by backslash, dollar, word char, or brace
+        r'('
+        r'[φϕ]?'  # Optional phi
+        r'(?:'
+        r'[VMPATNC]_[nuscrwyeogpbj](?:_?[0-9])?|'  # Variables with simple subscripts: V_n, M_u, V_s1
+        r'f\'_?c|'  # Concrete strength: f'c, f'_c
+        r'f_[yrc]|'  # Steel/material strength: f_y, f_r, f_c
+        r'A_[svgtcp]|'  # Areas: A_s, A_v, A_g
+        r'b_w|'  # Width: b_w
+        r'ρ_(?:min|max|b|s|bal)|'  # Reinforcement ratios: ρ_min, ρ_max
+        r'l_[dn]'  # Development length: l_d, l_n
+        r')'
+        r')'
+        r'(?![\\$\w}])'  # Not followed by backslash, dollar, word char, or brace
+    )
+    text = wrap_if_not_latex(structural_var_pattern, text)
+
+    # 4d. Concrete strength notation: f'c without subscript formatting
+    # Matches: f'c, √f'c, but not already in $ delimiters
+    text = re.sub(
+        r"(?<![\\$\w])(f'c)(?![\\$\w])",
+        r"$\1$",
+        text
+    )
+
+    # 4e. Expressions with square root symbol
+    # √f'c, √(f'c), √f'_c, etc.
+    text = re.sub(
+        r'(?<!\$)(√\(?f\'_?c\)?)',
+        r'$\1$',
+        text
+    )
+    # Also handle cases where f'c was already wrapped: √$f'c$ -> $√f'c$
+    text = re.sub(
+        r'√\$([^$]+)\$',
+        r'$√\1$',
+        text
+    )
+
+    # 4f. Greek letters commonly used in structural engineering (standalone)
+    # φ (phi - strength reduction), ρ (rho - reinforcement ratio), λ (lambda - lightweight factor)
+    # Only match if not already in a $ context and not followed by underscore (would be variable)
+    text = re.sub(
+        r'(?<![\\$\w])([φϕρλ])(?![\\$\w_≤≥<>])',
+        r'$\1$',
+        text
+    )
+
+    # Restore protected sections
+    for key, value in protected.items():
+        text = text.replace(key, value)
+
+    # Step 5: Clean up any double delimiters ($$$$) that might have been created
+    text = re.sub(r'\${3,}', '$$', text)
+
+    # Step 6: Fix adjacent $ delimiters that should be merged
+    # Note: Do NOT remove $$ (display math) - only remove truly empty pairs like $ $
+    text = re.sub(r'\$\s+\$', '', text)  # Remove empty $ $ pairs (with whitespace between)
+    text = re.sub(r'\$([^$]+)\$\s+\$([^$]+)\$', r'$\1 \2$', text)  # Merge adjacent inline (with space between)
+
+    # Step 7: Ensure $$ blocks are on their own lines for better rendering
+    # NOTE: Disabled because the patterns can incorrectly match across multiple
+    # $$...$$ blocks in the same text, treating closing $$ and opening $$ of
+    # adjacent equations as a single block. Streamlit renders $$...$$ inline fine.
+    # text = re.sub(r'([^\n])\$\$([^$]+)\$\$', r'\1\n$$\2$$', text)
+    # text = re.sub(r'\$\$([^$]+)\$\$([^\n])', r'$$\1$$\n\2', text)
+
+    # Step 8: SAFETY FALLBACK - Remove any remaining __PROTECTED_X__ placeholders
+    # This handles edge cases where restoration failed or source data had issues
+    # Use iterative approach to handle any nested placeholders
+    max_iterations = 10  # Prevent infinite loops
+    for _ in range(max_iterations):
+        # Check if any placeholders remain
+        if '__PROTECTED_' not in text:
+            break
+        # Try to restore from dictionary
+        for key, value in protected.items():
+            text = text.replace(key, value)
+        # If placeholders still remain after restoration, remove them
+        if '__PROTECTED_' in text:
+            text = re.sub(r'__PROTECTED_\d+__', '', text)
+
+    return text
+
+
+# =============================================================================
 # BALANCED RETRIEVER / RETRIEVER BALANCEADO
 # =============================================================================
 
@@ -1127,6 +1392,7 @@ def load_vectordb():
     embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME)
     vectordb = Chroma(
         persist_directory=PERSIST_DIR,
+        collection_name=COLLECTION_NAME,
         embedding_function=embeddings,
     )
     return vectordb
@@ -1216,6 +1482,51 @@ RULES FOR EXPANDED CONTEXT:
         # Insert the expanded instructions before the context section
         template = template.replace("Contexto normativo:", expanded_instructions + "Contexto normativo:")
         template = template.replace("Normative context:", expanded_instructions + "Normative context:")
+
+    # Add formula formatting instructions to all prompts
+    if language == "es":
+        formula_instructions = """
+FORMATO DE FÓRMULAS MATEMÁTICAS:
+Las fórmulas del contexto usan notación LaTeX con delimitadores $ y $$. MANTÉN estos delimitadores exactamente:
+- Fórmulas en línea: $V_n = V_c + V_s$
+- Fórmulas destacadas: $$V_n = V_c + V_s$$
+
+REGLAS IMPORTANTES:
+1. Copia las fórmulas del contexto TAL CUAL, incluyendo los símbolos $ o $$
+2. NO mezcles delimitadores (NO escribas $V_n$ = ... sin cerrar correctamente)
+3. Para fórmulas largas o importantes, usa $$ al inicio y $$ al final en líneas separadas
+4. Asegúrate de que cada $ o $$ de apertura tenga su correspondiente cierre
+5. Cuando ESCRIBAS fórmulas propias (no copiadas del contexto), SIEMPRE usa delimitadores $:
+   - Variables con subíndices: $V_n$, $V_c$, $V_s$, $M_n$, $M_u$, $A_s$, $f'_c$, $f_y$
+   - Ecuaciones: $V_n = V_c + V_s$, $φV_n ≥ V_u$
+   - Factores: $φ$ (phi), $ρ$ (cuantía), $λ$ (factor de peso ligero)
+6. NUNCA escribas variables como Vn, Vc, f'c sin delimitadores - SIEMPRE usa $V_n$, $V_c$, $f'_c$
+
+"""
+    else:
+        formula_instructions = """
+MATHEMATICAL FORMULA FORMAT:
+Formulas in the context use LaTeX notation with $ and $$ delimiters. KEEP these delimiters exactly:
+- Inline formulas: $V_n = V_c + V_s$
+- Display formulas: $$V_n = V_c + V_s$$
+
+IMPORTANT RULES:
+1. Copy formulas from the context AS IS, including the $ or $$ symbols
+2. DO NOT mix delimiters (DO NOT write $V_n$ = ... without proper closing)
+3. For long or important formulas, use $$ at the start and $$ at the end on separate lines
+4. Ensure every opening $ or $$ has its corresponding closing delimiter
+5. When WRITING your own formulas (not copied from context), ALWAYS use $ delimiters:
+   - Variables with subscripts: $V_n$, $V_c$, $V_s$, $M_n$, $M_u$, $A_s$, $f'_c$, $f_y$
+   - Equations: $V_n = V_c + V_s$, $φV_n ≥ V_u$
+   - Factors: $φ$ (phi), $ρ$ (reinforcement ratio), $λ$ (lightweight factor)
+6. NEVER write variables like Vn, Vc, f'c without delimiters - ALWAYS use $V_n$, $V_c$, $f'_c$
+
+"""
+    # Insert formula instructions near the beginning
+    template = template.replace("REGLAS ESTRICTAS:", formula_instructions + "REGLAS ESTRICTAS:")
+    template = template.replace("STRICT RULES:", formula_instructions + "STRICT RULES:")
+    template = template.replace("INSTRUCCIONES:", formula_instructions + "INSTRUCCIONES:")
+    template = template.replace("INSTRUCTIONS:", formula_instructions + "INSTRUCTIONS:")
 
     return PromptTemplate(
         input_variables=["context", "question", "chat_history"],
@@ -1332,15 +1643,19 @@ def query_with_sources(vectordb, llm, question: str, response_type: str, code_so
         source_type = doc.metadata.get('source_type', 'primary')
         referenced_by = doc.metadata.get('referenced_by', [])
 
+        # Convert LaTeX delimiters to Streamlit-compatible format
+        # This ensures LLM sees $...$ and $$...$$ which it will preserve in output
+        clean_content = convert_latex_delimiters(doc.page_content)
+
         # Add source type annotation if expansion is enabled
         if expand_references:
             if source_type == 'referenced' and referenced_by:
                 ref_info = f"[REFERENCED by {', '.join(referenced_by)}]"
             else:
                 ref_info = "[PRIMARY]"
-            context_parts.append(f"[code={code}, page={page}] {ref_info}\n{doc.page_content}")
+            context_parts.append(f"[code={code}, page={page}] {ref_info}\n{clean_content}")
         else:
-            context_parts.append(f"[code={code}, page={page}]\n{doc.page_content}")
+            context_parts.append(f"[code={code}, page={page}]\n{clean_content}")
 
     context = "\n\n---\n\n".join(context_parts)
 
@@ -1515,7 +1830,7 @@ def main():
                             st.markdown(msg["content"])
                     elif msg["role"] == "assistant":
                         with st.chat_message("assistant"):
-                            st.markdown(msg["content"])
+                            st.markdown(normalize_latex_output(msg["content"]))
 
                             # Show sources grouped by code
                             if msg.get("sources"):

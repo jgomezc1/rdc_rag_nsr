@@ -69,7 +69,17 @@ tmp/
 temp/
 *.tmp
 
-# Vector databases
+# Vector databases (old/unused)
 NSR10_DB/
+combined_DB/
+
+# Source PDFs (too large for GitHub)
 pdfs/
-# combined_DB/ - Re-added to repo for Streamlit Cloud deployment
+
+# Chunkr.ai processing output (large JSON files, rebuild with build_vectordb_chunkr.py)
+chunkr_output/
+
+# Development/testing images
+images/
+
+# NOTE: chroma_db_chunkr/ is tracked - required for Streamlit Cloud deployment
