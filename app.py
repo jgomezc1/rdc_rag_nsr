@@ -1234,7 +1234,21 @@ def extract_section_headers(content: str) -> List[str]:
     sections.extend(re.findall(aci_pattern, content))
 
     # Remove duplicates and sort
-    unique_sections = sorted(set(sections), key=lambda x: [int(p) if p.isdigit() else p for p in re.split(r'[.\s]', x)])
+    # Use tuple of (is_alpha, value) to ensure consistent ordering between letters and numbers
+    def section_sort_key(x):
+        parts = []
+        for p in re.split(r'[.\s]', x):
+            if p.isdigit():
+                parts.append((0, int(p)))  # Numbers sort first, by value
+            elif p:
+                parts.append((1, p))  # Letters sort after numbers, alphabetically
+        return parts
+
+    try:
+        unique_sections = sorted(set(sections), key=section_sort_key)
+    except Exception:
+        # Fallback to simple alphabetical sort if comparison fails
+        unique_sections = sorted(set(sections))
 
     # Return first 3 sections to keep it compact
     return unique_sections[:3]

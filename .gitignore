@@ -82,4 +82,5 @@ chunkr_output/
 # Development/testing images
 images/
 
-# NOTE: chroma_db_chunkr/ is tracked - required for Streamlit Cloud deployment
+# Vector database (too large for GitHub - use Git LFS or rebuild on deployment)
+#chroma_db_chunkr/
