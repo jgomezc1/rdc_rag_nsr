@@ -1,6 +1,12 @@
 """
 Chunkr Document Ingestion Script
-Processes NSR-10 and ACI-318 PDFs for RAG application.
+Processes structural engineering code PDFs for RAG application.
+
+Supported documents:
+- NSR-10: Colombian Seismic-Resistant Construction Code
+- ACI-318: American Concrete Institute Building Code
+- ASCE-7: Minimum Design Loads and Associated Criteria
+- LATBSDC: Los Angeles Tall Buildings Structural Design Council Guidelines
 
 Configuration:
 - Tables, Formulas, Pictures: Vision model (LLM) for better structure
@@ -55,6 +61,7 @@ except ImportError:
 # =============================================================================
 
 # PDFs to process
+# NOTE: Comment/uncomment documents as needed to avoid re-processing
 DOCUMENTS = [
     {
         "path": "pdfs/NSR-10.pdf",
@@ -66,6 +73,16 @@ DOCUMENTS = [
         "code": "ACI-318",
         "description": "American Concrete Institute Building Code"
     },
+    {
+        "path": "pdfs/ASCE7-16.pdf",
+        "code": "ASCE-7",
+        "description": "ASCE 7-16 Minimum Design Loads and Associated Criteria"
+    },
+    {
+        "path": "pdfs/LATBSDC_Guidelines.pdf",
+        "code": "LATBSDC",
+        "description": "Los Angeles Tall Buildings Structural Design Council Guidelines"
+    },
 ]
 
 # Output directory
@@ -75,7 +92,7 @@ OUTPUT_DIR = "chunkr_output"
 TARGET_CHUNK_LENGTH = 512  # tokens per chunk
 
 # Maximum file size for Chunkr API (in MB)
-MAX_FILE_SIZE_MB = 90  # Leave buffer below 100MB limit
+MAX_FILE_SIZE_MB = 30  # Split files larger than 30MB for reliable uploads
 
 
 def create_config() -> Configuration:

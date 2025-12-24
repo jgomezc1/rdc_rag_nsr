@@ -47,7 +47,15 @@ def load_chunks() -> list:
     """Load chunks from Chunkr output files."""
     all_chunks = []
 
-    for filename in ["NSR-10_chunks.json", "ACI-318_chunks.json"]:
+    # All supported chunk files (order: Colombian codes, then US codes)
+    chunk_files = [
+        "NSR-10_chunks.json",
+        "ACI-318_chunks.json",
+        "ASCE-7_chunks.json",
+        "LATBSDC_chunks.json",
+    ]
+
+    for filename in chunk_files:
         filepath = os.path.join(CHUNKR_OUTPUT_DIR, filename)
         if os.path.exists(filepath):
             with open(filepath, 'r', encoding='utf-8') as f:
@@ -119,12 +127,18 @@ def build_database(chunks: list, embeddings_model):
 
             # Augment content with code identifier for better semantic search
             # This helps when users ask "what does NSR-10 say about X" but the
-            # chunk text doesn't explicitly mention "NSR-10" (e.g., LEY 400 content)
+            # chunk text doesn't explicitly mention the code name
             code = chunk.get('code', 'unknown')
-            if code == 'NSR-10' and 'nsr-10' not in content.lower() and 'nsr10' not in content.lower():
+            content_lower = content.lower()
+
+            if code == 'NSR-10' and 'nsr-10' not in content_lower and 'nsr10' not in content_lower:
                 content = f"[NSR-10] {content}"
-            elif code == 'ACI-318' and 'aci-318' not in content.lower() and 'aci318' not in content.lower():
+            elif code == 'ACI-318' and 'aci-318' not in content_lower and 'aci318' not in content_lower:
                 content = f"[ACI-318] {content}"
+            elif code == 'ASCE-7' and 'asce-7' not in content_lower and 'asce7' not in content_lower and 'asce 7' not in content_lower:
+                content = f"[ASCE-7] {content}"
+            elif code == 'LATBSDC' and 'latbsdc' not in content_lower:
+                content = f"[LATBSDC] {content}"
 
             # Build metadata
             metadata = {
@@ -191,11 +205,13 @@ def verify_database():
 
     embeddings_model = create_embeddings_model()
 
-    # Test queries
+    # Test queries (Colombian and US codes)
     test_queries = [
         "requisitos de refuerzo longitudinal en vigas",
         "development length of reinforcement",
         "C.21.6.4 columnas",
+        "seismic design category",  # ASCE-7
+        "performance based design acceptance criteria",  # LATBSDC
     ]
 
     for query in test_queries:

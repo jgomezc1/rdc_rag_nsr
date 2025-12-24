@@ -133,12 +133,14 @@ Esto proporciona contexto adicional cuando un artículo cita otros artículos (e
 
 **Citations + Recommendations** (Recommended): Includes normative citations plus technical recommendations and best practices.""",
         "code_source_label": "Code source:",
-        "code_source_options": ["NSR-10 + ACI-318", "NSR-10 Only", "ACI-318 Only"],
+        "code_source_options": ["NSR-10 + ACI-318", "NSR-10 Only", "ACI-318 Only", "ASCE-7 + LATBSDC + ACI-318 (PBDE)"],
         "code_source_help": """**NSR-10 + ACI-318**: Query both codes with comparison.
 
 **NSR-10 Only**: Only Colombian mandatory code.
 
-**ACI-318 Only**: Only ACI-318 code as primary reference.""",
+**ACI-318 Only**: Only ACI-318 code as primary reference.
+
+**ASCE-7 + LATBSDC + ACI-318 (PBDE)**: Performance-Based Design bundle for US codes. Queries ASCE 7-16, LATBSDC Guidelines, and ACI-318 equally for peer review assistance.""",
         "clear_btn": "Clear conversation",
         "about_header": "About",
         "about_text": """This advanced normative assistant uses RAG to query:
@@ -157,7 +159,10 @@ Responses are structured to clearly distinguish between both sources.""",
         "sources_expander": "View consulted sources",
         "nsr_sources_header": "📘 NSR-10 Sources (Mandatory code)",
         "aci_sources_header": "📙 ACI-318 Sources (Technical reference)",
+        "asce_sources_header": "📗 ASCE-7 Sources (Load Criteria)",
+        "latbsdc_sources_header": "📕 LATBSDC Sources (PBD Guidelines)",
         "other_sources_header": "📄 Other sources",
+        "pbde_spinner_text": "Querying ASCE-7, LATBSDC, and ACI-318 codes...",
         "fragment_label": "Fragment",
         "page_label": "Page",
         "welcome_msg": "Enter a query in the left panel to get information from NSR-10 and ACI-318.",
@@ -801,6 +806,116 @@ Response (in English):
 """
 
 # =============================================================================
+# PBDE PROMPT TEMPLATES (ASCE-7 + LATBSDC + ACI-318) - English Only
+# =============================================================================
+
+PROMPT_PBDE_RECOMMENDATIONS_EN = """
+You are an expert assistant in structural engineering for performance-based design, specialized in:
+- ASCE 7-16: Minimum Design Loads and Associated Criteria for Buildings
+- LATBSDC: Los Angeles Tall Buildings Structural Design Council Guidelines
+- ACI-318: American Concrete Institute Building Code
+
+Your goal is to assist structural engineers in peer review of performance-based designs by providing comprehensive information from all three codes. All three codes are treated as equally important references.
+
+IMPORTANT CONTEXT:
+- Context fragments have a "code" field in their metadata: "ASCE-7", "LATBSDC", or "ACI-318".
+- All three codes are authoritative references for performance-based design review.
+- ASCE-7 provides load criteria and seismic design requirements.
+- LATBSDC provides guidelines for tall building performance-based design.
+- ACI-318 provides concrete structural requirements.
+
+CONVERSATIONAL MEMORY:
+- Review the CONVERSATION HISTORY before responding.
+- If the current question references a previous topic, interpret in context.
+
+STRICT RULES:
+1. Use the NORMATIVE CONTEXT as the main source for all references.
+2. ALWAYS clearly distinguish between what each code says (ASCE-7, LATBSDC, ACI-318).
+3. When citing any code, mention the section or article if it appears in the context.
+4. DO NOT invent section numbers or text not present in the context.
+5. If there is not enough information, respond:
+   "I cannot find sufficient information in the provided context from ASCE-7, LATBSDC, and ACI-318."
+
+STRUCTURE YOUR RESPONSE IN FOUR SECTIONS:
+
+**1) ASCE-7 Reference**
+- Use fragments with code="ASCE-7" from the context.
+- Summarize load criteria, seismic parameters, or relevant requirements.
+- If no relevant ASCE-7 fragments: "No specific ASCE-7 information was found in the context."
+
+**2) LATBSDC Guidelines Reference**
+- Use fragments with code="LATBSDC" from the context.
+- Summarize performance-based design requirements or acceptance criteria.
+- If no relevant LATBSDC fragments: "No specific LATBSDC information was found in the context."
+
+**3) ACI-318 Reference**
+- Use fragments with code="ACI-318" from the context.
+- Summarize structural concrete requirements.
+- If no relevant ACI-318 fragments: "No specific ACI-318 information was found in the context."
+
+**4) Integration and Recommendations**
+- Explain how the three codes interact for the topic.
+- Highlight any differences or complementary requirements.
+- Provide recommendations for peer review considerations.
+- EXPLICITLY clarify that these are **technical recommendations**.
+
+Conversation history:
+{chat_history}
+
+Normative context:
+{context}
+
+Current question:
+{question}
+
+Response (in English):
+"""
+
+PROMPT_PBDE_DICTIONARY_EN = """
+You are an assistant acting as a normative dictionary for performance-based structural design codes.
+
+Your goal is to quote ONLY the exact text from ASCE-7, LATBSDC, and ACI-318 without interpretations or recommendations.
+
+IMPORTANT CONTEXT:
+- Context fragments have a "code" field: "ASCE-7", "LATBSDC", or "ACI-318".
+- All three codes are treated as equal references.
+
+STRICT RULES:
+1. Quote ONLY the exact normative text that appears in the context.
+2. DO NOT provide interpretations, analysis, or recommendations.
+3. DO NOT invent section numbers or text not present in the context.
+4. Clearly distinguish between what each code says.
+5. Mention the section or article if it appears in the context.
+6. If there is not enough information, respond:
+   "I cannot find normative information in the provided context."
+
+STRUCTURE YOUR RESPONSE IN THREE SECTIONS:
+
+**Normative Reference (ASCE-7)**
+- Quote the exact text from fragments with code="ASCE-7".
+- If no ASCE-7 fragments: "No ASCE-7 information was found in the context."
+
+**Normative Reference (LATBSDC)**
+- Quote the exact text from fragments with code="LATBSDC".
+- If no LATBSDC fragments: "No LATBSDC information was found in the context."
+
+**Normative Reference (ACI-318)**
+- Quote the exact text from fragments with code="ACI-318".
+- If no ACI-318 fragments: "No ACI-318 information was found in the context."
+
+Conversation history:
+{chat_history}
+
+Normative context:
+{context}
+
+Current question:
+{question}
+
+Response (in English):
+"""
+
+# =============================================================================
 # LATEX FORMATTING HELPER
 # =============================================================================
 
@@ -1280,17 +1395,25 @@ def keyword_search_documents(vectorstore, references: List[str], code_filter: st
         collection = vectorstore._collection
         all_data = collection.get(include=["documents", "metadatas"])
 
-        # Determine which codes to include
-        include_nsr = code_filter in ["both", "nsr"]
-        include_aci = code_filter in ["both", "aci"]
+        # Determine which codes to include based on filter
+        if code_filter == "pbde":
+            # PBDE bundle: ASCE-7 + LATBSDC + ACI-318
+            allowed_codes = {"ASCE-7", "LATBSDC", "ACI-318"}
+        elif code_filter == "both":
+            # Colombian bundle: NSR-10 + ACI-318
+            allowed_codes = {"NSR-10", "ACI-318"}
+        elif code_filter == "nsr":
+            allowed_codes = {"NSR-10"}
+        elif code_filter == "aci":
+            allowed_codes = {"ACI-318"}
+        else:
+            allowed_codes = {"NSR-10", "ACI-318"}
 
         for doc_content, metadata in zip(all_data['documents'], all_data['metadatas']):
             code = metadata.get('code', '')
 
             # Check code filter
-            if code == 'NSR-10' and not include_nsr:
-                continue
-            if code == 'ACI-318' and not include_aci:
+            if code not in allowed_codes:
                 continue
 
             # Check if any reference is in this document
@@ -1512,47 +1635,66 @@ class BalancedCodeRetriever(BaseRetriever):
                     all_docs.append(doc)
 
         # Step 2: Semantic search for additional context
-        retrieve_nsr = self.code_filter in ["both", "nsr"]
-        retrieve_aci = self.code_filter in ["both", "aci"]
-
         # Adjust k based on how many keyword results we found
         keyword_count = len(all_docs)
         remaining_k = max(2, self.k_per_code - keyword_count // 2)
 
-        # When filtering to single code, retrieve more documents
-        k = remaining_k if self.code_filter == "both" else remaining_k * 2
+        # PBDE mode: retrieve from ASCE-7, LATBSDC, and ACI-318
+        if self.code_filter == "pbde":
+            k = remaining_k  # Balanced across 3 codes
+            for code_name in ["ASCE-7", "LATBSDC", "ACI-318"]:
+                try:
+                    code_docs = self.vectorstore.similarity_search(
+                        query,
+                        k=k,
+                        filter={"code": code_name}
+                    )
+                    for doc in code_docs:
+                        page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+                        if page_key not in seen_pages:
+                            seen_pages.add(page_key)
+                            all_docs.append(doc)
+                except Exception:
+                    pass
+        else:
+            # Colombian mode: NSR-10 and/or ACI-318
+            retrieve_nsr = self.code_filter in ["both", "nsr"]
+            retrieve_aci = self.code_filter in ["both", "aci"]
 
-        # Retrieve from NSR-10
-        if retrieve_nsr:
-            try:
-                nsr_docs = self.vectorstore.similarity_search(
-                    query,
-                    k=k,
-                    filter={"code": "NSR-10"}
-                )
-                for doc in nsr_docs:
-                    page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
-                    if page_key not in seen_pages:
-                        seen_pages.add(page_key)
-                        all_docs.append(doc)
-            except Exception:
-                pass
+            # When filtering to single code, retrieve more documents
+            k = remaining_k if self.code_filter == "both" else remaining_k * 2
 
-        # Retrieve from ACI-318
-        if retrieve_aci:
-            try:
-                aci_docs = self.vectorstore.similarity_search(
-                    query,
-                    k=k,
-                    filter={"code": "ACI-318"}
-                )
-                for doc in aci_docs:
-                    page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
-                    if page_key not in seen_pages:
-                        seen_pages.add(page_key)
-                        all_docs.append(doc)
-            except Exception:
-                pass
+            # Retrieve from NSR-10
+            if retrieve_nsr:
+                try:
+                    nsr_docs = self.vectorstore.similarity_search(
+                        query,
+                        k=k,
+                        filter={"code": "NSR-10"}
+                    )
+                    for doc in nsr_docs:
+                        page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+                        if page_key not in seen_pages:
+                            seen_pages.add(page_key)
+                            all_docs.append(doc)
+                except Exception:
+                    pass
+
+            # Retrieve from ACI-318
+            if retrieve_aci:
+                try:
+                    aci_docs = self.vectorstore.similarity_search(
+                        query,
+                        k=k,
+                        filter={"code": "ACI-318"}
+                    )
+                    for doc in aci_docs:
+                        page_key = (doc.metadata.get('page'), doc.metadata.get('code'))
+                        if page_key not in seen_pages:
+                            seen_pages.add(page_key)
+                            all_docs.append(doc)
+                except Exception:
+                    pass
 
         # Step 3: Expand references if enabled
         if self.expand_references and all_docs:
@@ -1617,27 +1759,37 @@ def get_prompt_template(response_type: str, code_source: str, language: str, exp
     if "Recomendaciones" in response_type or "Recommendations" in response_type:
         is_dictionary = False
 
-    # Determine code source
-    is_nsr_only = "NSR" in code_source and "ACI" not in code_source
-    is_aci_only = "ACI" in code_source and "NSR" not in code_source
-    is_both = not is_nsr_only and not is_aci_only
+    # Check for PBDE bundle (ASCE-7 + LATBSDC + ACI-318)
+    is_pbde = "PBDE" in code_source or ("ASCE" in code_source and "LATBSDC" in code_source)
 
-    if is_dictionary:
-        # Dictionary mode: citations only, no recommendations
-        if is_both:
-            template = PROMPT_DICTIONARY_BOTH_ES if language == "es" else PROMPT_DICTIONARY_BOTH_EN
-        elif is_nsr_only:
-            template = PROMPT_DICTIONARY_NSR_ES if language == "es" else PROMPT_DICTIONARY_NSR_EN
-        else:  # is_aci_only
-            template = PROMPT_DICTIONARY_ACI_ES if language == "es" else PROMPT_DICTIONARY_ACI_EN
+    if is_pbde:
+        # PBDE prompts (English only)
+        if is_dictionary:
+            template = PROMPT_PBDE_DICTIONARY_EN
+        else:
+            template = PROMPT_PBDE_RECOMMENDATIONS_EN
     else:
-        # Recommendations mode: with recommendations
-        if is_both:
-            template = PROMPT_NSR10_ACI318_ES if language == "es" else PROMPT_NSR10_ACI318_EN
-        elif is_nsr_only:
-            template = PROMPT_NSR10_SOLO_ES if language == "es" else PROMPT_NSR10_SOLO_EN
-        else:  # is_aci_only
-            template = PROMPT_ACI318_SOLO_ES if language == "es" else PROMPT_ACI318_SOLO_EN
+        # Colombian codes (NSR-10 / ACI-318)
+        is_nsr_only = "NSR" in code_source and "ACI" not in code_source
+        is_aci_only = "ACI" in code_source and "NSR" not in code_source
+        is_both = not is_nsr_only and not is_aci_only
+
+        if is_dictionary:
+            # Dictionary mode: citations only, no recommendations
+            if is_both:
+                template = PROMPT_DICTIONARY_BOTH_ES if language == "es" else PROMPT_DICTIONARY_BOTH_EN
+            elif is_nsr_only:
+                template = PROMPT_DICTIONARY_NSR_ES if language == "es" else PROMPT_DICTIONARY_NSR_EN
+            else:  # is_aci_only
+                template = PROMPT_DICTIONARY_ACI_ES if language == "es" else PROMPT_DICTIONARY_ACI_EN
+        else:
+            # Recommendations mode: with recommendations
+            if is_both:
+                template = PROMPT_NSR10_ACI318_ES if language == "es" else PROMPT_NSR10_ACI318_EN
+            elif is_nsr_only:
+                template = PROMPT_NSR10_SOLO_ES if language == "es" else PROMPT_NSR10_SOLO_EN
+            else:  # is_aci_only
+                template = PROMPT_ACI318_SOLO_ES if language == "es" else PROMPT_ACI318_SOLO_EN
 
     # Add expanded context instructions if reference expansion is enabled
     if expand_references:
@@ -1808,7 +1960,9 @@ def query_with_sources(vectordb, llm, question: str, response_type: str, code_so
     search_query = build_contextualized_query(question, chat_history, llm)
 
     # Determine code filter based on code_source selection
-    if "ACI" in code_source and "NSR" not in code_source:
+    if "PBDE" in code_source or ("ASCE" in code_source and "LATBSDC" in code_source):
+        code_filter = "pbde"
+    elif "ACI" in code_source and "NSR" not in code_source:
         code_filter = "aci"
     elif "NSR" in code_source and "ACI" not in code_source:
         code_filter = "nsr"
@@ -1936,10 +2090,17 @@ def main():
 
         st.divider()
 
-        # Code source selector (NSR-10, ACI-318, or Both)
+        # Code source selector (NSR-10, ACI-318, Both, or PBDE)
+        # PBDE option only available in English
+        if lang == "en":
+            code_source_options = txt['code_source_options']  # Includes PBDE
+        else:
+            # Spanish: filter out PBDE option
+            code_source_options = [opt for opt in txt['code_source_options'] if "PBDE" not in opt]
+
         code_source = st.radio(
             txt['code_source_label'],
-            options=txt['code_source_options'],
+            options=code_source_options,
             index=0,  # Default to "NSR-10 + ACI-318"
             help=txt['code_source_help']
         )
@@ -2037,10 +2198,13 @@ def main():
                                         st.code(chain_tree, language=None)
                                         st.divider()
 
-                                    # Compact list of sources
+                                    # Compact list of sources - separate by code
                                     nsr_sources = [s for s in sources_list if s.get("code") == "NSR-10"]
                                     aci_sources = [s for s in sources_list if s.get("code") == "ACI-318"]
-                                    other_sources = [s for s in sources_list if s.get("code") not in ["NSR-10", "ACI-318"]]
+                                    asce_sources = [s for s in sources_list if s.get("code") == "ASCE-7"]
+                                    latbsdc_sources = [s for s in sources_list if s.get("code") == "LATBSDC"]
+                                    known_codes = {"NSR-10", "ACI-318", "ASCE-7", "LATBSDC"}
+                                    other_sources = [s for s in sources_list if s.get("code") not in known_codes]
 
                                     # Helper function to display sources in compact format
                                     def display_sources_compact(src_list, header):
@@ -2066,18 +2230,38 @@ def main():
                                             ref_str = f" *(↩ {', '.join(ref_by)})*" if ref_by else " *(ref)*"
                                             st.markdown(f"- {txt['page_label']} {source['page']}{section_str}{ref_str}")
 
+                                    # Track if we've displayed any sources (for spacing)
+                                    displayed_any = False
+
+                                    # ASCE-7 sources (PBDE mode)
+                                    if asce_sources:
+                                        display_sources_compact(asce_sources, txt.get('asce_sources_header', '📗 ASCE-7 Sources'))
+                                        displayed_any = True
+
+                                    # LATBSDC sources (PBDE mode)
+                                    if latbsdc_sources:
+                                        if displayed_any:
+                                            st.write("")
+                                        display_sources_compact(latbsdc_sources, txt.get('latbsdc_sources_header', '📕 LATBSDC Sources'))
+                                        displayed_any = True
+
                                     # NSR-10 sources
-                                    display_sources_compact(nsr_sources, txt['nsr_sources_header'])
+                                    if nsr_sources:
+                                        if displayed_any:
+                                            st.write("")
+                                        display_sources_compact(nsr_sources, txt['nsr_sources_header'])
+                                        displayed_any = True
 
                                     # ACI-318 sources
                                     if aci_sources:
-                                        if nsr_sources:
-                                            st.write("")  # Small spacing
+                                        if displayed_any:
+                                            st.write("")
                                         display_sources_compact(aci_sources, txt['aci_sources_header'])
+                                        displayed_any = True
 
                                     # Other sources
                                     if other_sources:
-                                        if nsr_sources or aci_sources:
+                                        if displayed_any:
                                             st.write("")
                                         st.markdown(f"**{txt['other_sources_header']}**")
                                         for source in other_sources:
@@ -2152,7 +2336,13 @@ def main():
         # Add user message to history
         st.session_state.messages.append({"role": "user", "content": query_to_process})
 
-        with st.spinner(txt['spinner_text']):
+        # Determine spinner text based on code source
+        if "PBDE" in code_source:
+            spinner_text = txt.get('pbde_spinner_text', 'Querying ASCE-7, LATBSDC, and ACI-318 codes...')
+        else:
+            spinner_text = txt['spinner_text']
+
+        with st.spinner(spinner_text):
             # Pass previous messages for conversational context
             result = query_with_sources(vectordb, llm, query_to_process, response_type, code_source, lang, previous_messages, expand_references)
 
