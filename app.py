@@ -1730,11 +1730,54 @@ class BalancedCodeRetriever(BaseRetriever):
 # =============================================================================
 # CORE FUNCTIONS / FUNCIONES PRINCIPALES
 # =============================================================================
+def _check_and_pull_lfs():
+    """Check if database is LFS pointer and attempt to pull."""
+    import subprocess
+    db_file = os.path.join(PERSIST_DIR, "chroma.sqlite3")
+    if not os.path.exists(db_file):
+        return False, "Database file not found"
+
+    file_size = os.path.getsize(db_file)
+    # LFS pointer files are typically < 200 bytes
+    if file_size < 1000:
+        with open(db_file, 'r', errors='ignore') as f:
+            content = f.read(100)
+        if 'git-lfs' in content or 'version https://' in content:
+            # Attempt to pull LFS files
+            try:
+                result = subprocess.run(
+                    ['git', 'lfs', 'pull'],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                # Check if file size increased after pull
+                new_size = os.path.getsize(db_file)
+                if new_size > 1000:
+                    return True, "LFS files pulled successfully"
+                else:
+                    return False, f"LFS pull did not resolve pointer. stderr: {result.stderr}"
+            except FileNotFoundError:
+                return False, "git-lfs not installed"
+            except subprocess.TimeoutExpired:
+                return False, "LFS pull timed out"
+            except Exception as e:
+                return False, f"LFS pull error: {str(e)}"
+    return True, "Database OK"
+
+
 @st.cache_resource
 def load_vectordb():
     """Load the Chroma vector database from disk."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
+        return None
+
+    # Check if database exists and is not a Git LFS pointer
+    lfs_ok, lfs_message = _check_and_pull_lfs()
+    if not lfs_ok:
+        st.error(f"Database issue: {lfs_message}")
+        st.info("The vector database may not have been downloaded correctly.")
         return None
 
     embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME)
