@@ -1324,8 +1324,16 @@ def build_reference_chain_tree(sources: List[dict], txt: dict) -> str:
         # Remove duplicates from root
         root_sections = list(dict.fromkeys(root_sections))
 
+        # Track visited sections to prevent circular reference loops
+        visited = set()
+
         # Recursive function to build tree
         def add_branch(section_key, prefix="", is_last=True):
+            # Prevent infinite recursion from circular references
+            if section_key in visited:
+                return []
+            visited.add(section_key)
+
             branch_lines = []
             source = section_to_source.get(section_key)
 
