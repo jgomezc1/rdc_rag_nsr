@@ -2258,10 +2258,12 @@ def main():
                             st.markdown(normalize_latex_output(msg["content"]))
 
                             # Show sources grouped by code (compact format)
-                            if msg.get("sources"):
-                                with st.expander(txt['sources_expander']):
-                                    sources_list = msg["sources"]
-
+                            # Always show expander to display sources or indicate if none found
+                            with st.expander(txt['sources_expander']):
+                                sources_list = msg.get("sources", [])
+                                if not sources_list:
+                                    st.info("No se encontraron fuentes / No sources found")
+                                else:
                                     # Show reference chain tree if cross-references were expanded
                                     chain_tree = build_reference_chain_tree(sources_list, txt)
                                     if chain_tree:
