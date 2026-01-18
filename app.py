@@ -1644,6 +1644,12 @@ class BalancedCodeRetriever(BaseRetriever):
         if articulo_match:
             regulatory_keywords.append(f'ARTÍCULO {articulo_match.group(1)}')
 
+        # Check for cover/recubrimiento queries - add C.7.7 section search
+        if 'recubrimiento' in query_lower or 'cover' in query_lower:
+            regulatory_keywords.append('C.7.7')
+            regulatory_keywords.append('CR7.7')
+            regulatory_keywords.append('protección de concreto para el refuerzo')
+
         if regulatory_keywords:
             keyword_docs = keyword_search_documents(
                 self.vectorstore,
